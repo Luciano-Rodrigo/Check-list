@@ -52,7 +52,11 @@ Senha: admin123
 - Botão flutuante para preencher checklist rapidamente.
 - Opções avançadas de arte para modelos: cor, categoria, cabeçalho e borda.
 - Tema claro e escuro.
-- Persistência em PostgreSQL quando executado pelo backend Node.
+- Persistência em PostgreSQL normalizado quando executado pelo backend Node.
+- Tabelas separadas para acessos, workspaces, modelos, permissões de agentes, checklists preenchidos e tarefas.
+- Cada cadastro de Empresa ou Pessoal cria seu próprio workspace zerado no banco.
+- Agentes ficam isolados dentro do workspace da empresa que os criou.
+- O ADM consegue ler todos os workspaces.
 - Fallback local via `localStorage` quando aberto sem API.
 
 ## Deploy na Railway
@@ -63,16 +67,17 @@ Senha: admin123
 4. Garanta que a variável `DATABASE_URL` do PostgreSQL esteja disponível no serviço web.
 5. O comando de start já está em `railway.json` e `package.json`: `npm start`.
 
-O backend cria automaticamente a tabela `app_state`:
+O backend cria automaticamente as tabelas principais:
 
 ```sql
-create table if not exists app_state (
-  key text primary key,
-  payload jsonb not null,
-  updated_at timestamptz not null default now()
-);
+access_workspaces
+app_users
+checklist_models
+checklist_model_assignments
+checklist_submissions
+daily_tasks
 ```
 
 ## Observação técnica
 
-Nesta versão, o PostgreSQL persiste o estado completo da aplicação em JSONB. É uma boa ponte para deploy inicial. A evolução natural é normalizar o banco em tabelas separadas para usuários, modelos, preenchimentos, tarefas e anexos.
+O banco agora usa tabelas separadas por tipo de cadastro e todas as tabelas operacionais possuem `workspace_id`. Isso entrega isolamento por acesso sem criar nomes dinâmicos de tabela por usuário, que é mais seguro e mais fácil de manter no PostgreSQL. A tabela antiga `app_state` ainda é criada apenas para migração automática de dados antigos, caso já exista um deploy anterior.
