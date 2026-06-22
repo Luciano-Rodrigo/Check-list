@@ -22,6 +22,12 @@ http://127.0.0.1:5173
 
 Sem `DATABASE_URL`, o servidor responde a API usando estado inicial em memória e o navegador mantém fallback em `localStorage`.
 
+Para regenerar os ícones PWA a partir da logo SVG:
+
+```powershell
+npm run icons
+```
+
 ## Acesso demo
 
 ```text
@@ -52,6 +58,9 @@ Senha: admin123
 - Botão flutuante para preencher checklist rapidamente.
 - Opções avançadas de arte para modelos: cor, categoria, cabeçalho e borda.
 - Tema claro e escuro.
+- PWA instalável com manifesto, service worker, ícone Luma, favicon e Apple touch icon.
+- Botão de instalação na tela de login.
+- Layout mobile com barra superior compacta e menu suspenso pelos três traços.
 - Persistência em PostgreSQL normalizado quando executado pelo backend Node.
 - Tabelas separadas para acessos, workspaces, modelos, permissões de agentes, checklists preenchidos e tarefas.
 - Cada cadastro de Empresa ou Pessoal cria seu próprio workspace zerado no banco.

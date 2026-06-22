@@ -27,6 +27,7 @@ let authMode = "login";
 let pendingVerification = null;
 let mediaRecorder = null;
 let currentAudioField = "";
+let deferredInstallPrompt = null;
 let chunks = [];
 
 const app = document.getElementById("app");
@@ -36,6 +37,13 @@ document.addEventListener("click", handleGlobalClick);
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("change", handleChange);
 document.addEventListener("input", handleInput);
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  document.querySelectorAll('[data-action="install-app"]').forEach((button) => {
+    button.classList.remove("hidden");
+  });
+});
 document.addEventListener("DOMContentLoaded", async () => {
   state = await loadState();
   currentUser = getSessionUser();
@@ -206,6 +214,24 @@ function setSession(user) {
   else localStorage.removeItem(SESSION_KEY);
 }
 
+async function installApp() {
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    return;
+  }
+  alert("Para instalar: no celular, abra o menu do navegador e toque em 'Adicionar à tela inicial'. No Chrome desktop, use o ícone de instalação na barra de endereço.");
+}
+
+function toggleMobileMenu() {
+  document.body.classList.toggle("mobile-menu-open");
+}
+
+function closeMobileMenu() {
+  document.body.classList.remove("mobile-menu-open");
+}
+
 function applyTheme() {
   const theme = localStorage.getItem("luma.theme") || "light";
   document.documentElement.dataset.theme = theme;
@@ -259,8 +285,28 @@ function render() {
     users: renderUsers,
   };
   const content = (pageMap[currentPage] || renderDashboard)();
+  const navigation = `
+    <nav class="nav">
+      ${navButton("dashboard", "Painel", "dashboard")}
+      ${currentUser.role !== "agent" ? navButton("templates", "Modelos", "models") : ""}
+      ${navButton("fill", "Preencher", "check")}
+      ${navButton("reports", "Checklists preenchidos", "filled")}
+      ${navButton("tasks", "Tarefas", "tasks")}
+      ${["adm", "company"].includes(currentUser.role) ? navButton("users", "Acessos", "users") : ""}
+    </nav>
+  `;
   app.innerHTML = `
     <div class="app-shell">
+      <header class="mobile-appbar">
+        <button class="hamburger" data-action="toggle-mobile-menu" type="button" aria-label="Abrir menu">
+          <span></span><span></span><span></span>
+        </button>
+        <div class="mobile-title">
+          <div class="brand-mark">L</div>
+          <strong>Checklist Luma</strong>
+        </div>
+        <button class="icon-button" data-action="toggle-theme" type="button" title="Alternar tema">${iconUi("theme")}</button>
+      </header>
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">L</div>
@@ -269,14 +315,7 @@ function render() {
             <p>Luma</p>
           </div>
         </div>
-        <nav class="nav">
-          ${navButton("dashboard", "Painel", "dashboard")}
-          ${currentUser.role !== "agent" ? navButton("templates", "Modelos", "models") : ""}
-          ${navButton("fill", "Preencher", "check")}
-          ${navButton("reports", "Checklists preenchidos", "filled")}
-          ${navButton("tasks", "Tarefas", "tasks")}
-          ${["adm", "company"].includes(currentUser.role) ? navButton("users", "Acessos", "users") : ""}
-        </nav>
+        ${navigation}
         <div class="sidebar-footer">
           <span class="badge">${roleLabel(currentUser.role)}</span>
           <div>
@@ -287,6 +326,7 @@ function render() {
           <button class="danger-button logout-button" data-action="logout" type="button">${iconUi("logout")} Sair</button>
         </div>
       </aside>
+      <div class="mobile-menu-backdrop" data-action="close-mobile-menu"></div>
       <main class="main">${content}</main>
       <button class="fab" data-action="open-fill-picker" type="button">+ Preencher checklist</button>
     </div>
@@ -324,6 +364,7 @@ function renderAuth() {
             <p>Produto Luma</p>
           </div>
         </div>
+        <button class="install-button" data-action="install-app" type="button">${iconUi("download")} Baixar app</button>
         <div class="tabs">
           <button type="button" class="${authMode === "login" ? "active" : ""}" data-auth-mode="login">Entrar</button>
           <button type="button" class="${authMode === "signup" ? "active" : ""}" data-auth-mode="signup">Cadastrar</button>
@@ -528,6 +569,7 @@ function iconUi(name) {
     users: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0 2c-3.3 0-6 1.7-6 3.8V20h12v-2.2C15 15.7 12.3 14 9 14Zm8-1a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 1.5c-.8 0-1.5.1-2.1.4 1.2.8 2.1 1.8 2.1 3V20h4v-1.7c0-2.1-1.8-3.8-4-3.8Z"/></svg>`,
     theme: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10c0-.4 0-.7-.1-1A7 7 0 0 1 13 3.1 8 8 0 0 0 12 2Z"/></svg>`,
     logout: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h8v2H7v14h6v2H5V3Zm11.6 5.4L20.2 12l-3.6 3.6-1.4-1.4 1.2-1.2H10v-2h6.4l-1.2-1.2 1.4-1.4Z"/></svg>`,
+    download: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9l3.2-3.2 1.4 1.4L12 15.8l-5.6-5.6 1.4-1.4L11 12V3ZM5 18h14v3H5v-3Z"/></svg>`,
     edit: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5V20h2.5L17.1 9.4l-2.5-2.5L4 17.5ZM18 8.5 15.5 6 17 4.5a1.8 1.8 0 0 1 2.5 2.5L18 8.5Z"/></svg>`,
     trash: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v8H9v-8Zm4 0h2v8h-2v-8ZM6 9h12l-1 12H7L6 9Z"/></svg>`,
     pdf: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l4 4v16H6V2Zm8 1v4h4M8 15h8v2H8v-2Zm0-4h8v2H8v-2Z"/></svg>`,
@@ -1201,6 +1243,7 @@ function handleGlobalClick(event) {
   if (target.dataset.page) {
     currentPage = target.dataset.page;
     render();
+    closeMobileMenu();
   }
   if (target.dataset.authMode) {
     authMode = target.dataset.authMode;
@@ -1213,6 +1256,9 @@ function handleGlobalClick(event) {
     setSession(null);
     render();
   }
+  if (action === "toggle-mobile-menu") toggleMobileMenu();
+  if (action === "close-mobile-menu") closeMobileMenu();
+  if (action === "install-app") installApp();
   if (action === "toggle-theme") {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     localStorage.setItem("luma.theme", next);
