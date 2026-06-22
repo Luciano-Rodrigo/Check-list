@@ -1,0 +1,10 @@
+{
+  "name": "Check list profissional",
+  "short_name": "Checklist Luma",
+  "description": "Sistema web Luma para modelos de checklist, evidências, assinaturas, relatórios e tarefas.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#175cd3",
+  "lang": "pt-BR"
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Check list profissional | Luma</title>
+    <meta name="theme-color" content="#175cd3" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <template id="field-template">
+      <div class="builder-field">
+        <div class="field-head">
+          <input class="field-title" type="text" placeholder="Ponto a ser checado" />
+          <select class="field-kind" aria-label="Tipo do campo">
+            <option value="inspection">Checagem</option>
+            <option value="signature">Assinatura</option>
+          </select>
+          <button class="icon-button danger remove-field" type="button" title="Remover campo">×</button>
+        </div>
+        <div class="field-options">
+          <label><input type="checkbox" data-option="check" checked /> Check</label>
+          <label><input type="checkbox" data-option="text" /> Observação</label>
+          <label><input type="checkbox" data-option="photo" /> Foto</label>
+          <label><input type="checkbox" data-option="audio" /> Áudio e transcrição</label>
+          <label><input type="checkbox" data-option="location" /> Localização</label>
+          <label><input type="checkbox" data-option="selfieDoc" /> Foto com documento</label>
+        </div>
+      </div>
+    </template>
+    <script src="app.js"></script>
+  </body>
+</html>
