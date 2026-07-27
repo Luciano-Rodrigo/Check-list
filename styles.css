@@ -514,6 +514,41 @@ textarea {
   gap: 12px;
 }
 
+.dashboard-summary-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.dashboard-summary-card article {
+  min-height: 94px;
+  padding: 16px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--primary) 9%, transparent), transparent),
+    var(--surface);
+}
+
+.dashboard-summary-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dashboard-summary-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 30px;
+}
+
+.compact-task {
+  cursor: pointer;
+}
+
 .section-heading,
 .modal-head {
   display: flex;
@@ -662,6 +697,111 @@ textarea {
 
 .compact-modal {
   width: min(680px, 100%);
+}
+
+.success-modal {
+  text-align: center;
+  display: grid;
+  place-items: center;
+  gap: 12px;
+}
+
+.success-modal h2,
+.success-modal p {
+  margin: 0;
+}
+
+.success-check {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--ok);
+  animation: popSuccess 520ms ease both;
+}
+
+.success-check svg {
+  width: 42px;
+  height: 42px;
+  fill: currentColor;
+}
+
+.success-actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+@keyframes popSuccess {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  70% {
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.detail-grid {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.detail-grid p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.detail-grid span {
+  color: var(--muted);
+}
+
+.task-card {
+  cursor: pointer;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 118px;
+  padding: 18px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 46%, var(--line));
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent),
+    var(--surface);
+  color: var(--accent);
+  text-align: center;
+}
+
+.empty-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.empty-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
 }
 
 .badge {
@@ -1025,10 +1165,22 @@ textarea {
   padding: 18px;
 }
 
+.checklist-modal .form {
+  gap: 8px;
+}
+
 .checklist-top {
   margin: -18px -18px 18px;
-  padding: 18px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
+}
+
+.checklist-top h2 {
+  margin-bottom: 4px;
+}
+
+.checklist-top p {
+  margin-top: 0;
 }
 
 .art-stripe {
@@ -1069,33 +1221,47 @@ textarea {
 }
 
 .runtime-field legend {
-  position: relative;
-  top: 12px;
-  margin-left: 18px;
-  z-index: 2;
+  display: none;
 }
 
 .inspection-card {
   display: grid;
-  grid-template-columns: 126px 1fr 150px;
+  grid-template-columns: 34px 96px 1fr auto;
   align-items: center;
-  min-height: 132px;
-  padding: 22px 26px;
+  gap: 10px;
+  min-height: 66px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent-color, var(--primary)) 50%, var(--line));
-  border-radius: 18px;
+  border-radius: 12px;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--accent-color, var(--primary)) 13%, transparent), transparent 72%),
     var(--surface);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
 }
 
 .inspection-card h3 {
   margin: 0;
-  text-align: center;
-  font-size: clamp(17px, 2.4vw, 24px);
-  font-style: italic;
+  text-align: left;
+  font-size: 15px;
+  font-style: normal;
   font-weight: 850;
   letter-spacing: 0;
+}
+
+.field-kind-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent-color, var(--primary));
+  background: color-mix(in srgb, var(--accent-color, var(--primary)) 12%, transparent);
+}
+
+.field-kind-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
 }
 
 .inspection-status,
@@ -1107,28 +1273,34 @@ textarea {
 }
 
 .inspection-actions {
-  grid-column: 1 / -1;
-  margin-top: 18px;
+  margin-top: 0;
+  justify-content: flex-end;
 }
 
 .status-button {
-  width: 54px;
-  height: 54px;
+  width: 34px;
+  height: 34px;
   border: 0;
   background: transparent;
-  font-size: 42px;
+  font-size: 0;
   box-shadow: none;
 }
 
+.status-button svg {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+}
+
 .status-button.selected {
-  transform: scale(1.18);
+  transform: scale(1.08);
   background: transparent;
   box-shadow: none;
 }
 
 .tool-icon {
-  width: 46px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   border: 0;
@@ -1144,11 +1316,22 @@ textarea {
 }
 
 .tool-icon svg {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   fill: currentColor;
   stroke: currentColor;
   stroke-width: 0;
+}
+
+.signature-inline {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.signature-inline .signature-pad {
+  height: 86px;
 }
 
 .tool-icon svg path,
@@ -1381,7 +1564,7 @@ textarea {
   }
 
   .main {
-    padding: 14px;
+    padding: 12px;
     padding-bottom: 96px;
   }
 
@@ -1444,6 +1627,41 @@ textarea {
   .metric {
     min-height: 72px;
     padding: 12px;
+  }
+
+  .dashboard-summary-card {
+    grid-template-columns: 1fr;
+    gap: 0;
+    border: 0;
+    border-radius: 14px;
+    background:
+      radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 38%),
+      linear-gradient(135deg, #182434, #24364a);
+    box-shadow: 0 16px 34px rgba(15, 23, 42, 0.18);
+  }
+
+  .dashboard-summary-card article {
+    min-height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: transparent;
+    color: #fff;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .dashboard-summary-card article:last-child {
+    border-bottom: 0;
+  }
+
+  .dashboard-summary-card span {
+    color: rgba(255, 255, 255, 0.72);
+  }
+
+  .dashboard-summary-card strong {
+    margin: 0;
+    font-size: 26px;
   }
 
   .metric strong {
@@ -1520,22 +1738,62 @@ textarea {
   }
 
   .inspection-card {
-    grid-template-columns: 1fr;
-    gap: 10px;
-    padding: 18px;
+    grid-template-columns: 28px 74px 1fr;
+    gap: 7px;
+    min-height: 58px;
+    padding: 8px;
   }
 
   .inspection-status {
-    order: 1;
+    order: 2;
+    gap: 6px;
   }
 
   .inspection-card h3 {
-    order: 2;
+    order: 3;
+    font-size: 13px;
   }
 
   .inspection-actions {
-    order: 3;
-    margin-top: 6px;
+    order: 4;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .field-kind-icon {
+    order: 1;
+    width: 26px;
+    height: 26px;
+  }
+
+  .status-button,
+  .tool-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .status-button svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .tool-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .signature-inline {
+    order: 5;
+  }
+
+  .signature-inline .signature-pad {
+    height: 74px;
+  }
+
+  .success-actions {
+    grid-template-columns: 1fr;
   }
 
   .icon-button {
@@ -1543,6 +1801,7 @@ textarea {
   }
 
   .modal-head .icon-button,
+  .toolbar .icon-button,
   .calendar-nav {
     width: 40px;
     flex: 0 0 40px;

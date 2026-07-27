@@ -451,6 +451,7 @@ function renderDashboard() {
   const templates = visibleTemplates();
   const submissions = visibleSubmissions();
   const tasks = visibleTasks();
+  const todayTasks = tasks.filter((task) => !task.done && taskDateKey(task) === toDateKey(new Date()));
   return `
     ${pageHeader("Painel", "Visão geral dos modelos, preenchimentos e tarefas em andamento.")}
     <section class="dashboard-hero">
@@ -464,16 +465,25 @@ function renderDashboard() {
         ${currentUser.role !== "agent" ? `<button class="secondary-button icon-text" data-action="open-template-modal" type="button">${iconUi("models")} Criar modelo</button>` : ""}
       </div>
     </section>
-    <section class="grid cols-3">
-      <article class="card metric"><span class="muted">Modelos disponíveis</span><strong>${templates.length}</strong></article>
-      <article class="card metric"><span class="muted">Checklists preenchidos</span><strong>${submissions.length}</strong></article>
-      <article class="card metric"><span class="muted">Tarefas abertas</span><strong>${tasks.filter((t) => !t.done).length}</strong></article>
+    <section class="dashboard-summary-card">
+      <article>
+        <span>Modelos disponíveis</span>
+        <strong>${templates.length}</strong>
+      </article>
+      <article>
+        <span>Checklists preenchidos</span>
+        <strong>${submissions.length}</strong>
+      </article>
+      <article>
+        <span>Tarefas abertas</span>
+        <strong>${tasks.filter((t) => !t.done).length}</strong>
+      </article>
     </section>
     <section class="grid cols-2 dashboard-lists" style="margin-top:16px">
       <article class="card upcoming-card">
-        <h3>Próximas tarefas</h3>
-        ${renderMiniList(tasks.filter((t) => !t.done).slice(0, 4), "Nenhuma tarefa aberta.", (task) => `
-          <div class="list-item">
+        <h3>Tarefas de hoje</h3>
+        ${renderMiniList(todayTasks.slice(0, 4), renderEmptyState("Sem tarefas para hoje!", "tasks"), (task) => `
+          <div class="list-item compact-task" data-action="open-task-details" data-id="${task.id}">
             <strong>${escapeHtml(task.title)}</strong>
             <span class="small">${task.recurrenceHours ? `A cada ${task.recurrenceHours}h` : "Tarefa simples"} · ${formatDateOnly(taskDateKey(task))}</span>
           </div>
@@ -493,7 +503,17 @@ function renderDashboard() {
 }
 
 function renderMiniList(items, empty, mapper) {
-  return items.length ? `<div class="list">${items.map(mapper).join("")}</div>` : `<div class="empty">${empty}</div>`;
+  if (items.length) return `<div class="list">${items.map(mapper).join("")}</div>`;
+  return String(empty).trim().startsWith("<") ? empty : `<div class="empty">${empty}</div>`;
+}
+
+function renderEmptyState(message, icon = "tasks") {
+  return `
+    <div class="empty-state">
+      <span class="empty-icon">${iconUi(icon)}</span>
+      <strong>${escapeHtml(message)}</strong>
+    </div>
+  `;
 }
 
 function renderTemplates() {
@@ -518,6 +538,7 @@ function renderTemplateItem(tpl) {
         </div>
         <div class="toolbar">
           <span class="badge">${tpl.visibility === "public" ? "Público" : "Privado"}</span>
+          ${tpl.ownerId === currentUser.id || currentUser.role === "adm" ? `<button class="secondary-button" data-action="edit-template" data-id="${tpl.id}" type="button">Editar</button>` : ""}
           <button class="secondary-button" data-action="duplicate-template" data-id="${tpl.id}" type="button">Duplicar</button>
           ${tpl.ownerId === currentUser.id || currentUser.role === "adm" ? `<button class="danger-button" data-action="delete-template" data-id="${tpl.id}" type="button">Excluir</button>` : ""}
         </div>
@@ -568,8 +589,10 @@ function iconUi(name) {
     dashboard: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v7H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-3h7v8h-7v-8Z"/></svg>`,
     models: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6V3Zm8 1v4h4"/></svg>`,
     check: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5 1.8-1.8L9 13.4 18.2 4.2 20 6Z"/></svg>`,
+    close: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z"/></svg>`,
     filled: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5V4Zm3 4h8v2H8V8Zm0 4h8v2H8v-2Zm0 4h5v2H8v-2Z"/></svg>`,
     tasks: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h14v2H7V5Zm0 6h14v2H7v-2Zm0 6h14v2H7v-2ZM3 5h2v2H3V5Zm0 6h2v2H3v-2Zm0 6h2v2H3v-2Z"/></svg>`,
+    bell: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.8 2.8 0 0 0 2.7-2h-5.4A2.8 2.8 0 0 0 12 22Zm7-6-1.5-1.7V10a5.5 5.5 0 0 0-4.2-5.4V3a1.3 1.3 0 0 0-2.6 0v1.6A5.5 5.5 0 0 0 6.5 10v4.3L5 16v2h14v-2Z"/></svg>`,
     users: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0 2c-3.3 0-6 1.7-6 3.8V20h12v-2.2C15 15.7 12.3 14 9 14Zm8-1a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 1.5c-.8 0-1.5.1-2.1.4 1.2.8 2.1 1.8 2.1 3V20h4v-1.7c0-2.1-1.8-3.8-4-3.8Z"/></svg>`,
     theme: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10c0-.4 0-.7-.1-1A7 7 0 0 1 13 3.1 8 8 0 0 0 12 2Z"/></svg>`,
     logout: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h8v2H7v14h6v2H5V3Zm11.6 5.4L20.2 12l-3.6 3.6-1.4-1.4 1.2-1.2H10v-2h6.4l-1.2-1.2 1.4-1.4Z"/></svg>`,
@@ -613,25 +636,13 @@ function renderTasks() {
   const openCount = tasks.filter((task) => !task.done).length;
   const doneCount = tasks.filter((task) => task.done).length;
   return `
-    ${pageHeader("Tarefas", "Agenda visual das tarefas e compromissos.", `<button class="secondary-button icon-text" data-action="request-notification" type="button">${iconUi("tasks")} Ativar notificações</button>`)}
+    ${pageHeader("Tarefas", "Agenda visual das tarefas e compromissos.", `<button class="icon-button" data-action="request-notification" type="button" title="Ativar notificações" aria-label="Ativar notificações">${iconUi("bell")}</button>`)}
     <section class="task-summary">
       <article><span>Abertas</span><strong>${openCount}</strong></article>
       <article><span>Concluídas</span><strong>${doneCount}</strong></article>
       <article><span>No dia</span><strong>${selectedTasks.length}</strong></article>
     </section>
     ${renderTaskCalendar(tasks)}
-    <section class="task-day">
-      <div class="section-heading">
-        <div>
-          <span class="template-kicker">Dia selecionado</span>
-          <h3>${formatDateOnly(selectedTaskDate)}</h3>
-        </div>
-        <button class="primary-button icon-text" data-action="open-task-modal" type="button">${iconUi("tasks")} Criar tarefa</button>
-      </div>
-      <div class="list">
-        ${selectedTasks.map(renderTask).join("") || `<div class="empty">Nenhuma tarefa para este dia.</div>`}
-      </div>
-    </section>
   `;
 }
 
@@ -653,7 +664,7 @@ function renderTaskCalendar(tasks) {
     const key = toDateKey(new Date(year, month, day));
     const count = taskCounts[key] || 0;
     cells.push(`
-      <button class="calendar-cell ${key === selectedTaskDate ? "active" : ""} ${count ? "has-task" : ""}" data-action="select-task-date" data-date="${key}" type="button">
+      <button class="calendar-cell ${key === selectedTaskDate ? "active" : ""} ${count ? "has-task" : ""}" data-action="open-task-day" data-date="${key}" type="button">
         <span>${day}</span>
         ${count ? `<small>${count}</small>` : ""}
       </button>
@@ -678,7 +689,7 @@ function renderTaskCalendar(tasks) {
 function renderTask(task) {
   const tpl = state.templates.find((item) => item.id === task.templateId);
   return `
-    <article class="list-item task-card ${task.done ? "done" : ""}">
+    <article class="list-item task-card ${task.done ? "done" : ""}" data-action="open-task-details" data-id="${task.id}">
       <div class="list-item-head">
         <div>
           <label class="inline-check">
@@ -791,45 +802,104 @@ function openTaskModal() {
   document.body.appendChild(modal);
 }
 
-function openTemplateModal() {
+function openTaskDayModal(dateKey) {
+  selectedTaskDate = dateKey || selectedTaskDate;
+  const tasks = visibleTasks().filter((task) => taskDateKey(task) === selectedTaskDate);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal task-day-modal">
+      <div class="modal-head">
+        <div>
+          <span class="template-kicker">Agenda</span>
+          <h2>${formatDateOnly(selectedTaskDate)}</h2>
+          <p class="muted">${tasks.length ? `${tasks.length} tarefa(s) cadastrada(s)` : "Nenhuma tarefa cadastrada para este dia."}</p>
+        </div>
+        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+      </div>
+      <div class="list">
+        ${tasks.map(renderTask).join("") || renderEmptyState("Sem tarefas neste dia!", "tasks")}
+      </div>
+      <button class="primary-button icon-text" data-action="open-task-modal" type="button">${iconUi("tasks")} Criar tarefa neste dia</button>
+    </section>
+  `;
+  document.body.appendChild(modal);
+}
+
+function openTaskDetailsModal(id) {
+  const task = visibleTasks().find((item) => item.id === id);
+  if (!task) return;
+  const tpl = state.templates.find((item) => item.id === task.templateId);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal task-detail-modal">
+      <div class="modal-head">
+        <div>
+          <span class="template-kicker">${task.done ? "Concluída" : "Aberta"}</span>
+          <h2>${escapeHtml(task.title)}</h2>
+          <p class="muted">Agenda: ${formatDateOnly(taskDateKey(task))}</p>
+        </div>
+        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+      </div>
+      <div class="detail-grid">
+        <p><strong>Responsável</strong><span>${escapeHtml(userName(task.assignedTo))}</span></p>
+        <p><strong>Tipo</strong><span>${task.recurrenceHours ? `Recorrente a cada ${task.recurrenceHours}h` : "Tarefa simples"}</span></p>
+        <p><strong>Janela</strong><span>${task.startHour || "08:00"} até ${task.endHour || "18:00"}</span></p>
+        <p><strong>Checklist</strong><span>${tpl ? escapeHtml(tpl.title) : "Sem checklist vinculado"}</span></p>
+        ${task.completedLocation ? `<p><strong>Local de conclusão</strong><span>${escapeHtml(task.completedLocation)}</span></p>` : ""}
+      </div>
+      <div class="toolbar">
+        ${tpl ? `<button class="primary-button" data-action="start-fill" data-id="${tpl.id}" data-task-id="${task.id}" type="button">Preencher checklist</button>` : ""}
+        <button class="danger-button" data-action="delete-task" data-id="${task.id}" type="button">Excluir tarefa</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+}
+
+function openTemplateModal(templateId = "") {
+  const editing = state.templates.find((item) => item.id === templateId);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.innerHTML = `
     <section class="modal">
       <div class="topbar">
         <div>
-          <h2>Novo modelo</h2>
-          <p>Defina campos, evidências e distribuição para agentes.</p>
+          <h2>${editing ? "Editar modelo" : "Novo modelo"}</h2>
+          <p>${editing ? "Ajuste campos, evidências e distribuição deste modelo." : "Defina campos, evidências e distribuição para agentes."}</p>
         </div>
         <button class="icon-button" data-action="close-modal" type="button">×</button>
       </div>
-      <form class="form" data-form="template">
+      <form class="form" data-form="template" data-template-id="${editing?.id || ""}">
         <div class="split">
           <div class="form-row">
             <label>Nome do modelo</label>
-            <input name="title" required />
+            <input name="title" value="${escapeHtml(editing?.title || "")}" required />
           </div>
           <div class="form-row">
             <label>Visibilidade</label>
             <select name="visibility">
-              <option value="private">Privado</option>
-              <option value="public">Público</option>
+              <option value="private" ${editing?.visibility === "private" ? "selected" : ""}>Privado</option>
+              <option value="public" ${editing?.visibility === "public" ? "selected" : ""}>Público</option>
             </select>
           </div>
         </div>
         <div class="split">
           <div class="form-row">
             <label>Categoria visual</label>
-            <input name="category" placeholder="Ex.: Segurança, Estoque, Oficina" />
+            <input name="category" placeholder="Ex.: Segurança, Estoque, Oficina" value="${escapeHtml(editing?.category || "")}" />
           </div>
           <div class="form-row">
             <label>Cor do modelo</label>
             <select name="accent">
-              <option value="blue">Azul profissional</option>
-              <option value="teal">Verde técnico</option>
-              <option value="violet">Violeta atendimento</option>
-              <option value="amber">Âmbar segurança</option>
-              <option value="rose">Rosa controle</option>
+              ${renderSelectedOptions([
+                ["blue", "Azul profissional"],
+                ["teal", "Verde técnico"],
+                ["violet", "Violeta atendimento"],
+                ["amber", "Âmbar segurança"],
+                ["rose", "Rosa controle"],
+              ], editing?.accent || "blue")}
             </select>
           </div>
         </div>
@@ -837,31 +907,35 @@ function openTemplateModal() {
           <div class="form-row">
             <label>Cabeçalho artístico</label>
             <select name="artHeader">
-              <option value="clean">Minimalista</option>
-              <option value="stripe">Faixa lateral</option>
-              <option value="glass">Vidro suave</option>
-              <option value="solid">Bloco de cor</option>
+              ${renderSelectedOptions([
+                ["clean", "Minimalista"],
+                ["stripe", "Faixa lateral"],
+                ["glass", "Vidro suave"],
+                ["solid", "Bloco de cor"],
+              ], editing?.artHeader || "clean")}
             </select>
           </div>
           <div class="form-row">
             <label>Borda do checklist</label>
             <select name="borderStyle">
-              <option value="soft">Suave</option>
-              <option value="line">Linha fina</option>
-              <option value="shadow">Sombra</option>
-              <option value="frame">Moldura</option>
+              ${renderSelectedOptions([
+                ["soft", "Suave"],
+                ["line", "Linha fina"],
+                ["shadow", "Sombra"],
+                ["frame", "Moldura"],
+              ], editing?.borderStyle || "soft")}
             </select>
           </div>
         </div>
         <div class="form-row">
           <label>Descrição</label>
-          <textarea name="description"></textarea>
+          <textarea name="description">${escapeHtml(editing?.description || "")}</textarea>
         </div>
         ${currentUser.role === "company" ? `
           <div class="form-row">
             <label>Agentes com acesso</label>
             <div class="checkline">
-              ${agentsForCompany().map((a) => `<label><input type="checkbox" name="agentIds" value="${a.id}" /> ${escapeHtml(a.name)}</label>`).join("") || `<span class="small">Crie agentes para distribuir modelos específicos.</span>`}
+              ${agentsForCompany().map((a) => `<label><input type="checkbox" name="agentIds" value="${a.id}" ${editing?.assignedAgentIds?.includes(a.id) ? "checked" : ""} /> ${escapeHtml(a.name)}</label>`).join("") || `<span class="small">Crie agentes para distribuir modelos específicos.</span>`}
             </div>
           </div>
         ` : ""}
@@ -870,12 +944,17 @@ function openTemplateModal() {
           <div id="builder-fields" class="grid"></div>
           <button class="secondary-button" data-action="add-builder-field" type="button">Adicionar campo</button>
         </div>
-        <button class="primary-button" type="submit">Salvar modelo</button>
+        <button class="primary-button" type="submit">${editing ? "Salvar alterações" : "Salvar modelo"}</button>
       </form>
     </section>
   `;
   document.body.appendChild(modal);
-  addBuilderField();
+  if (editing?.fields?.length) editing.fields.forEach(addBuilderField);
+  else addBuilderField();
+}
+
+function renderSelectedOptions(options, selectedValue) {
+  return options.map(([value, label]) => `<option value="${value}" ${value === selectedValue ? "selected" : ""}>${label}</option>`).join("");
 }
 
 function addBuilderField(seed) {
@@ -906,7 +985,6 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
           <h2>${escapeHtml(tpl.title)}</h2>
           <p>${editing ? "Editando checklist preenchido" : escapeHtml(tpl.description || "Preenchimento de checklist")}</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button">×</button>
       </div>
       <form class="form" data-form="submission" data-template-id="${tpl.id}" data-task-id="${taskId}" data-submission-id="${submissionId}">
         ${tpl.fields.map(renderRuntimeField).join("")}
@@ -947,6 +1025,34 @@ function openFillPickerModal() {
   document.body.appendChild(modal);
 }
 
+function openChecklistSuccessModal(submissionId) {
+  const submission = state.submissions.find((item) => item.id === submissionId);
+  if (!submission) return;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal success-modal">
+      <div class="success-check">${iconUi("check")}</div>
+      <h2>Checklist preenchido com sucesso!</h2>
+      <p class="muted">${escapeHtml(submission.templateTitle)} foi salvo e já está disponível nos checklists preenchidos.</p>
+      <div class="success-actions">
+        <button class="secondary-button" data-action="share-whatsapp" data-id="${submission.id}" type="button">Compartilhar via Wpp</button>
+        <button class="secondary-button icon-text" data-action="success-pdf" data-id="${submission.id}" type="button">${iconUi("pdf")} Exportar PDF</button>
+        <button class="primary-button" data-action="go-dashboard" type="button">Voltar ao painel</button>
+        <button class="secondary-button" data-action="fill-another" type="button">Preencher novo checklist</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+}
+
+function shareSubmissionWhatsapp(id) {
+  const submission = state.submissions.find((item) => item.id === id);
+  if (!submission) return;
+  const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+}
+
 function selectCheckStatus(fieldId, value, options = {}) {
   const fieldset = document.querySelector(`[data-field-id="${fieldId}"]`);
   if (!fieldset) return;
@@ -962,14 +1068,15 @@ function selectCheckStatus(fieldId, value, options = {}) {
 
 function renderRuntimeField(field) {
   const options = field.options || {};
+  const isSignature = field.kind === "signature";
   return `
-    <fieldset class="runtime-field ${field.kind === "signature" ? "signature-field" : ""}" data-field-id="${field.id}">
-      <legend><span class="badge">${field.kind === "signature" ? "Assinatura" : "Checagem"}</span></legend>
+    <fieldset class="runtime-field ${isSignature ? "signature-field" : ""}" data-field-id="${field.id}">
       <div class="inspection-card">
+        <span class="field-kind-icon">${isSignature ? iconUi("edit") : iconUi("check")}</span>
         <div class="inspection-status">
           ${options.check ? `
-            <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="Correto" aria-label="Correto">✓</button>
-            <button class="status-button fail" data-action="select-check-status" data-field="${field.id}" data-value="fail" type="button" title="Incorreto" aria-label="Incorreto">×</button>
+            <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="Correto" aria-label="Correto">${iconUi("check")}</button>
+            <button class="status-button fail" data-action="select-check-status" data-field="${field.id}" data-value="fail" type="button" title="Incorreto" aria-label="Incorreto">${iconUi("close")}</button>
             <input type="hidden" name="${field.id}_status" />
           ` : ""}
         </div>
@@ -979,14 +1086,14 @@ function renderRuntimeField(field) {
           ${options.text ? `<button class="tool-icon" data-action="open-observation-modal" data-field="${field.id}" type="button" title="Observações">${iconChat()}</button>` : ""}
           ${options.audio ? `<button class="tool-icon" data-action="start-audio" data-field="${field.id}" type="button" title="Gravar áudio">${iconMic()}</button>` : ""}
         </div>
+        ${isSignature ? `<div class="signature-inline"><label>Assinatura</label><canvas class="signature-pad" data-signature="${field.id}"></canvas><input type="hidden" name="${field.id}_signature" /></div>` : ""}
       </div>
       ${options.text ? `<input type="hidden" name="${field.id}_text" /><div class="evidence-note hidden" data-note-preview="${field.id}"></div>` : ""}
       ${options.photo ? `<input class="hidden-file" name="${field.id}_photo_input" data-photo-input="${field.id}" type="file" accept="image/*" multiple /><input type="hidden" name="${field.id}_photos" value="[]" /><div class="photo-strip" data-photo-strip="${field.id}"></div>` : ""}
       ${options.audio ? `<input type="hidden" name="${field.id}_audio" /><input type="hidden" name="${field.id}_transcript" /><div class="audio-strip" data-audio-preview="${field.id}"></div>` : ""}
-      ${options.location || options.check ? `<input type="hidden" name="${field.id}_location" /><span class="small location-note" data-location-note="${field.id}">${field.kind === "signature" ? "Localização será capturada ao assinar." : "Localização será capturada ao selecionar o resultado."}</span>` : ""}
-      ${field.kind === "signature" ? `<div class="form-row"><label>Assinatura</label><canvas class="signature-pad" data-signature="${field.id}"></canvas><input type="hidden" name="${field.id}_signature" /></div>` : ""}
+      ${options.location || options.check ? `<input type="hidden" name="${field.id}_location" /><span class="small location-note" data-location-note="${field.id}">${isSignature ? "Localização será capturada ao assinar." : "Localização será capturada ao selecionar o resultado."}</span>` : ""}
       ${options.selfieDoc ? `<input type="hidden" name="${field.id}_selfieDoc_existing" /><div class="form-row"><label>Foto da pessoa com documento</label><input name="${field.id}_selfieDoc" type="file" accept="image/*" capture="user" /></div>` : ""}
-      ${field.kind === "signature" ? `<input type="hidden" name="${field.id}_ip" value="Indisponível no navegador local" />` : ""}
+      ${isSignature ? `<input type="hidden" name="${field.id}_ip" value="Indisponível no navegador local" />` : ""}
     </fieldset>
   `;
 }
@@ -1205,8 +1312,10 @@ function submitTemplate(form, data) {
     };
   }).filter((field) => field.title);
   if (!fields.length) return alert("Adicione pelo menos um campo.");
-  state.templates.push({
-    id: uid(),
+  const existingId = form.dataset.templateId || "";
+  const existing = state.templates.find((tpl) => tpl.id === existingId);
+  const payload = {
+    id: existing?.id || uid(),
     title: String(data.get("title")).trim(),
     description: String(data.get("description")).trim(),
     visibility: String(data.get("visibility")),
@@ -1214,12 +1323,15 @@ function submitTemplate(form, data) {
     accent: String(data.get("accent") || "blue"),
     artHeader: String(data.get("artHeader") || "clean"),
     borderStyle: String(data.get("borderStyle") || "soft"),
-    ownerId: currentUser.id,
-    companyId: currentUser.companyId,
+    ownerId: existing?.ownerId || currentUser.id,
+    companyId: existing?.companyId || currentUser.companyId,
     assignedAgentIds: data.getAll("agentIds"),
     fields,
-    createdAt: new Date().toISOString(),
-  });
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  if (existing) state.templates = state.templates.map((tpl) => (tpl.id === existing.id ? payload : tpl));
+  else state.templates.push(payload);
   saveState();
   closeModal();
   render();
@@ -1245,7 +1357,7 @@ function submitTask(data) {
   });
   selectedTaskDate = dueDate;
   saveState();
-  closeModal();
+  closeAllModals();
   render();
 }
 
@@ -1320,9 +1432,9 @@ async function submitChecklist(form, data) {
     }
   }
   saveState();
-  closeModal();
-  currentPage = "reports";
+  closeAllModals();
   render();
+  openChecklistSuccessModal(payload.id);
 }
 
 function firstLocationFromAnswers(answers) {
@@ -1365,7 +1477,7 @@ function handleGlobalClick(event) {
   if (action === "add-builder-field") addBuilderField();
   if (action === "close-modal") closeModal();
   if (action === "start-fill") {
-    closeModal();
+    closeAllModals();
     openFillModal(target.dataset.id, target.dataset.taskId || "");
   }
   if (action === "open-fill-picker") openFillPickerModal();
@@ -1383,6 +1495,17 @@ function handleGlobalClick(event) {
   if (action === "print-report") showReport(target.dataset.id, true);
   if (action === "delete-submission") deleteSubmission(target.dataset.id);
   if (action === "browser-print") window.print();
+  if (action === "share-whatsapp") shareSubmissionWhatsapp(target.dataset.id);
+  if (action === "success-pdf") showReport(target.dataset.id, true);
+  if (action === "go-dashboard") {
+    closeAllModals();
+    currentPage = "dashboard";
+    render();
+  }
+  if (action === "fill-another") {
+    closeAllModals();
+    openFillPickerModal();
+  }
   if (action === "open-company-modal") openUserModal("company");
   if (action === "open-agent-modal") openUserModal("agent");
   if (action === "request-notification") requestNotification();
@@ -1390,11 +1513,14 @@ function handleGlobalClick(event) {
     selectedTaskDate = target.dataset.date || selectedTaskDate;
     render();
   }
+  if (action === "open-task-day") openTaskDayModal(target.dataset.date || selectedTaskDate);
+  if (action === "open-task-details") openTaskDetailsModal(target.dataset.id);
   if (action === "change-task-month") {
     selectedTaskDate = shiftTaskMonth(Number(target.dataset.offset || 0));
     render();
   }
   if (action === "delete-task") deleteTask(target.dataset.id);
+  if (action === "edit-template") openTemplateModal(target.dataset.id);
   if (action === "delete-template") deleteTemplate(target.dataset.id);
   if (action === "duplicate-template") duplicateTemplate(target.dataset.id);
   if (action === "toggle-task") toggleTask(target.dataset.id, target.checked);
@@ -1420,6 +1546,12 @@ function handleInput(event) {
 function closeModal() {
   const modals = document.querySelectorAll(".modal-backdrop");
   modals[modals.length - 1]?.remove();
+  mediaRecorder = null;
+  chunks = [];
+}
+
+function closeAllModals() {
+  document.querySelectorAll(".modal-backdrop").forEach((modal) => modal.remove());
   mediaRecorder = null;
   chunks = [];
 }
@@ -1507,6 +1639,7 @@ function safeJson(value, fallback) {
 function deleteTask(id) {
   state.tasks = state.tasks.filter((task) => task.id !== id);
   saveState();
+  closeAllModals();
   render();
 }
 
@@ -1514,6 +1647,7 @@ function deleteTemplate(id) {
   if (!confirm("Excluir este modelo?")) return;
   state.templates = state.templates.filter((tpl) => tpl.id !== id);
   saveState();
+  closeAllModals();
   render();
 }
 
@@ -1529,6 +1663,7 @@ function deleteSubmission(id) {
   if (!confirm("Excluir este checklist preenchido?")) return;
   state.submissions = state.submissions.filter((item) => item.id !== id);
   saveState();
+  closeAllModals();
   render();
 }
 
