@@ -1036,7 +1036,7 @@ function openChecklistSuccessModal(submissionId) {
       <h2>Checklist preenchido com sucesso!</h2>
       <p class="muted">${escapeHtml(submission.templateTitle)} foi salvo e já está disponível nos checklists preenchidos.</p>
       <div class="success-actions">
-        <button class="secondary-button" data-action="share-whatsapp" data-id="${submission.id}" type="button">Compartilhar via Wpp</button>
+        <button class="secondary-button" data-action="share-whatsapp" data-id="${submission.id}" type="button">Compartilhar PDF no Wpp</button>
         <button class="secondary-button icon-text" data-action="success-pdf" data-id="${submission.id}" type="button">${iconUi("pdf")} Exportar PDF</button>
         <button class="primary-button" data-action="go-dashboard" type="button">Voltar ao painel</button>
         <button class="secondary-button" data-action="fill-another" type="button">Preencher novo checklist</button>
@@ -1046,11 +1046,108 @@ function openChecklistSuccessModal(submissionId) {
   document.body.appendChild(modal);
 }
 
-function shareSubmissionWhatsapp(id) {
+async function shareSubmissionWhatsapp(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
   const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
-  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+  const file = new File([buildSubmissionPdfBlob(submission)], `${safeFileName(submission.templateTitle)}.pdf`, { type: "application/pdf" });
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ files: [file], title: submission.templateTitle, text });
+    return;
+  }
+  downloadBlob(file, file.name);
+  window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF baixado: anexe o arquivo ${file.name} nesta conversa.`)}`, "_blank", "noopener");
+}
+
+function buildSubmissionPdfBlob(submission) {
+  const lines = [
+    "Checklist preenchido",
+    submission.templateTitle,
+    `Data: ${formatDate(submission.createdAt)}`,
+    `Preenchido por: ${userName(submission.filledBy)}`,
+    "",
+    ...submission.answers.flatMap((answer, index) => [
+      `${index + 1}. ${answer.title}`,
+      answer.status ? `Status: ${answer.status === "ok" ? "Correto" : "Incorreto"}` : "",
+      answer.text ? `Observacao: ${answer.text}` : "",
+      answer.transcript ? `Transcricao: ${answer.transcript}` : "",
+      answer.location ? `Localizacao: ${answer.location}` : "",
+      answer.signature ? "Assinatura: registrada" : "",
+      answer.photos?.length ? `Fotos: ${answer.photos.length} anexo(s) registrado(s) no app` : "",
+      "",
+    ]),
+  ].filter((line) => line !== null && line !== undefined);
+  const wrapped = lines.flatMap((line) => wrapPdfLine(normalizePdfText(line), 82));
+  const content = [
+    "BT",
+    "/F1 11 Tf",
+    "46 800 Td",
+    "14 TL",
+    ...wrapped.slice(0, 52).map((line) => `(${pdfEscape(line)}) Tj T*`),
+    "ET",
+  ].join("\n");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf], { type: "application/pdf" });
+}
+
+function normalizePdfText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ");
+}
+
+function wrapPdfLine(line, maxLength) {
+  if (!line) return [""];
+  const words = line.split(/\s+/);
+  const rows = [];
+  let current = "";
+  words.forEach((word) => {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > maxLength) {
+      if (current) rows.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  });
+  if (current) rows.push(current);
+  return rows;
+}
+
+function pdfEscape(value) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+}
+
+function safeFileName(value) {
+  return normalizePdfText(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "checklist";
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function selectCheckStatus(fieldId, value, options = {}) {
@@ -1072,7 +1169,7 @@ function renderRuntimeField(field) {
   return `
     <fieldset class="runtime-field ${isSignature ? "signature-field" : ""}" data-field-id="${field.id}">
       <div class="inspection-card">
-        <span class="field-kind-icon">${isSignature ? iconUi("edit") : iconUi("check")}</span>
+        ${isSignature ? `<span class="field-kind-icon">${iconUi("edit")}</span>` : ""}
         <div class="inspection-status">
           ${options.check ? `
             <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="Correto" aria-label="Correto">${iconUi("check")}</button>
@@ -1495,7 +1592,11 @@ function handleGlobalClick(event) {
   if (action === "print-report") showReport(target.dataset.id, true);
   if (action === "delete-submission") deleteSubmission(target.dataset.id);
   if (action === "browser-print") window.print();
-  if (action === "share-whatsapp") shareSubmissionWhatsapp(target.dataset.id);
+  if (action === "share-whatsapp") {
+    shareSubmissionWhatsapp(target.dataset.id).catch((error) => {
+      if (error?.name !== "AbortError") alert("Não foi possível abrir o compartilhamento do PDF.");
+    });
+  }
   if (action === "success-pdf") showReport(target.dataset.id, true);
   if (action === "go-dashboard") {
     closeAllModals();
