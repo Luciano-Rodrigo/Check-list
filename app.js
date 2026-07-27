@@ -23,6 +23,7 @@ const initialState = {
 let state = structuredClone(initialState);
 let currentUser = null;
 let currentPage = "dashboard";
+let selectedTaskDate = toDateKey(new Date());
 let authMode = "login";
 let pendingVerification = null;
 let mediaRecorder = null;
@@ -170,6 +171,7 @@ function migrateState(nextState) {
   nextState.tasks.forEach((task) => {
     task.templateId ||= "";
     task.completedLocation ||= "";
+    task.dueDate ||= toDateKey(task.createdAt || new Date());
   });
   saveMigratedState(nextState);
   return nextState;
@@ -288,13 +290,15 @@ function render() {
   const navigation = `
     <nav class="nav">
       ${navButton("dashboard", "Painel", "dashboard")}
+      ${navButton("tasks", "Tarefas", "tasks")}
       ${currentUser.role !== "agent" ? navButton("templates", "Modelos", "models") : ""}
       ${navButton("fill", "Preencher", "check")}
       ${navButton("reports", "Checklists preenchidos", "filled")}
-      ${navButton("tasks", "Tarefas", "tasks")}
       ${["adm", "company"].includes(currentUser.role) ? navButton("users", "Acessos", "users") : ""}
     </nav>
   `;
+  const fabAction = currentPage === "tasks" ? "open-task-modal" : "open-fill-picker";
+  const fabLabel = currentPage === "tasks" ? "+ Criar tarefa" : "+ Preencher checklist";
   app.innerHTML = `
     <div class="app-shell">
       <header class="mobile-appbar">
@@ -328,7 +332,7 @@ function render() {
       </aside>
       <div class="mobile-menu-backdrop" data-action="close-mobile-menu"></div>
       <main class="main">${content}</main>
-      <button class="fab" data-action="open-fill-picker" type="button">+ Preencher checklist</button>
+      <button class="fab" data-action="${fabAction}" type="button">${fabLabel}</button>
     </div>
   `;
 }
@@ -465,22 +469,22 @@ function renderDashboard() {
       <article class="card metric"><span class="muted">Checklists preenchidos</span><strong>${submissions.length}</strong></article>
       <article class="card metric"><span class="muted">Tarefas abertas</span><strong>${tasks.filter((t) => !t.done).length}</strong></article>
     </section>
-    <section class="grid cols-2" style="margin-top:16px">
+    <section class="grid cols-2 dashboard-lists" style="margin-top:16px">
+      <article class="card upcoming-card">
+        <h3>Próximas tarefas</h3>
+        ${renderMiniList(tasks.filter((t) => !t.done).slice(0, 4), "Nenhuma tarefa aberta.", (task) => `
+          <div class="list-item">
+            <strong>${escapeHtml(task.title)}</strong>
+            <span class="small">${task.recurrenceHours ? `A cada ${task.recurrenceHours}h` : "Tarefa simples"} · ${formatDateOnly(taskDateKey(task))}</span>
+          </div>
+        `)}
+      </article>
       <article class="card">
         <h3>Últimos preenchimentos</h3>
         ${renderMiniList(submissions.slice(-4).reverse(), "Nenhum preenchimento ainda.", (item) => `
           <div class="list-item">
             <strong>${escapeHtml(item.templateTitle)}</strong>
             <span class="small">${formatDate(item.createdAt)} por ${escapeHtml(userName(item.filledBy))}</span>
-          </div>
-        `)}
-      </article>
-      <article class="card">
-        <h3>Próximas tarefas</h3>
-        ${renderMiniList(tasks.filter((t) => !t.done).slice(0, 4), "Nenhuma tarefa aberta.", (task) => `
-          <div class="list-item">
-            <strong>${escapeHtml(task.title)}</strong>
-            <span class="small">${task.recurrenceHours ? `A cada ${task.recurrenceHours}h` : "Tarefa simples"}</span>
           </div>
         `)}
       </article>
@@ -605,50 +609,68 @@ function renderReports() {
 
 function renderTasks() {
   const tasks = visibleTasks();
-  const templates = visibleTemplates();
-  const assignOptions = currentUser.role === "company"
-    ? `<option value="${currentUser.id}">Minha empresa</option>${agentsForCompany().map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")}`
-    : `<option value="${currentUser.id}">Eu</option>`;
-  const templateOptions = `<option value="">Sem checklist vinculado</option>${templates.map((tpl) => `<option value="${tpl.id}">${escapeHtml(tpl.title)}</option>`).join("")}`;
+  const selectedTasks = tasks.filter((task) => taskDateKey(task) === selectedTaskDate);
+  const openCount = tasks.filter((task) => !task.done).length;
+  const doneCount = tasks.filter((task) => task.done).length;
   return `
-    ${pageHeader("Tarefas", "Crie tarefas simples ou recorrentes com janela de funcionamento.", `<button class="secondary-button icon-text" data-action="request-notification" type="button">${iconUi("tasks")} Ativar notificações</button>`)}
-    <section class="card">
-      <form class="form" data-form="task">
-        <div class="split">
-          <div class="form-row">
-            <label>Tarefa</label>
-            <input name="title" placeholder="Ex.: beber água" required />
-          </div>
-          <div class="form-row">
-            <label>Atribuir para</label>
-            <select name="assignedTo">${assignOptions}</select>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>Modelo de checklist vinculado</label>
-          <select name="templateId">${templateOptions}</select>
-        </div>
-        <div class="split">
-          <div class="form-row">
-            <label>Recorrência em horas</label>
-            <input name="recurrenceHours" type="number" min="0" step="1" placeholder="0 para tarefa simples" />
-          </div>
-          <div class="split">
-            <div class="form-row">
-              <label>Início</label>
-              <input name="startHour" type="time" value="08:00" />
-            </div>
-            <div class="form-row">
-              <label>Fim</label>
-              <input name="endHour" type="time" value="18:00" />
-            </div>
-          </div>
-        </div>
-        <button class="primary-button icon-text" type="submit">${iconUi("tasks")} Criar tarefa</button>
-      </form>
+    ${pageHeader("Tarefas", "Agenda visual das tarefas e compromissos.", `<button class="secondary-button icon-text" data-action="request-notification" type="button">${iconUi("tasks")} Ativar notificações</button>`)}
+    <section class="task-summary">
+      <article><span>Abertas</span><strong>${openCount}</strong></article>
+      <article><span>Concluídas</span><strong>${doneCount}</strong></article>
+      <article><span>No dia</span><strong>${selectedTasks.length}</strong></article>
     </section>
-    <section class="list" style="margin-top:16px">
-      ${tasks.map(renderTask).join("") || `<div class="empty">Nenhuma tarefa cadastrada.</div>`}
+    ${renderTaskCalendar(tasks)}
+    <section class="task-day">
+      <div class="section-heading">
+        <div>
+          <span class="template-kicker">Dia selecionado</span>
+          <h3>${formatDateOnly(selectedTaskDate)}</h3>
+        </div>
+        <button class="primary-button icon-text" data-action="open-task-modal" type="button">${iconUi("tasks")} Criar tarefa</button>
+      </div>
+      <div class="list">
+        ${selectedTasks.map(renderTask).join("") || `<div class="empty">Nenhuma tarefa para este dia.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTaskCalendar(tasks) {
+  const selected = dateFromKey(selectedTaskDate);
+  const year = selected.getFullYear();
+  const month = selected.getMonth();
+  const first = new Date(year, month, 1);
+  const startOffset = first.getDay();
+  const totalDays = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  const taskCounts = tasks.reduce((acc, task) => {
+    const key = taskDateKey(task);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  for (let i = 0; i < startOffset; i += 1) cells.push(`<span class="calendar-cell muted-cell"></span>`);
+  for (let day = 1; day <= totalDays; day += 1) {
+    const key = toDateKey(new Date(year, month, day));
+    const count = taskCounts[key] || 0;
+    cells.push(`
+      <button class="calendar-cell ${key === selectedTaskDate ? "active" : ""} ${count ? "has-task" : ""}" data-action="select-task-date" data-date="${key}" type="button">
+        <span>${day}</span>
+        ${count ? `<small>${count}</small>` : ""}
+      </button>
+    `);
+  }
+  return `
+    <section class="task-calendar card">
+      <div class="calendar-head">
+        <button class="icon-button calendar-nav" data-action="change-task-month" data-offset="-1" type="button" title="Mês anterior">&lt;</button>
+        <strong>${new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(selected)}</strong>
+        <button class="icon-button calendar-nav" data-action="change-task-month" data-offset="1" type="button" title="Próximo mês">&gt;</button>
+        <span>${tasks.length} tarefa(s)</span>
+      </div>
+      <div class="calendar-weekdays">
+        ${["D", "S", "T", "Q", "Q", "S", "S"].map((day) => `<span>${day}</span>`).join("")}
+      </div>
+      <div class="calendar-grid">${cells.join("")}</div>
     </section>
   `;
 }
@@ -656,14 +678,15 @@ function renderTasks() {
 function renderTask(task) {
   const tpl = state.templates.find((item) => item.id === task.templateId);
   return `
-    <article class="list-item">
+    <article class="list-item task-card ${task.done ? "done" : ""}">
       <div class="list-item-head">
         <div>
           <label class="inline-check">
             <input type="checkbox" data-action="toggle-task" data-id="${task.id}" ${task.done ? "checked" : ""} />
             <strong>${escapeHtml(task.title)}</strong>
           </label>
-          <div class="small">Para ${escapeHtml(userName(task.assignedTo))} · ${task.recurrenceHours ? `a cada ${task.recurrenceHours}h entre ${task.startHour} e ${task.endHour}` : "simples"}</div>
+          <div class="small">Para ${escapeHtml(userName(task.assignedTo))} · ${task.recurrenceHours ? `a cada ${task.recurrenceHours}h entre ${task.startHour} e ${task.endHour}` : "tarefa simples"}</div>
+          <div class="small">Agenda: ${formatDateOnly(taskDateKey(task))}</div>
           ${tpl ? `<div class="task-template-chip ${accentClass(tpl)}">${escapeHtml(tpl.title)}</div>` : ""}
           ${task.completedLocation ? `<div class="small">Concluída em ${escapeHtml(task.completedLocation)}</div>` : ""}
         </div>
@@ -701,6 +724,71 @@ function renderUserItem(user) {
       </div>
     </article>
   `;
+}
+
+function renderTaskForm() {
+  const templates = visibleTemplates();
+  const assignOptions = currentUser.role === "company"
+    ? `<option value="${currentUser.id}">Minha empresa</option>${agentsForCompany().map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")}`
+    : `<option value="${currentUser.id}">Eu</option>`;
+  const templateOptions = `<option value="">Sem checklist vinculado</option>${templates.map((tpl) => `<option value="${tpl.id}">${escapeHtml(tpl.title)}</option>`).join("")}`;
+  return `
+    <form class="form" data-form="task">
+      <div class="form-row">
+        <label>Tarefa</label>
+        <input name="title" placeholder="Ex.: Vistoriar loja 2" required />
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label>Data</label>
+          <input name="dueDate" type="date" value="${selectedTaskDate}" required />
+        </div>
+        <div class="form-row">
+          <label>Atribuir para</label>
+          <select name="assignedTo">${assignOptions}</select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Modelo de checklist vinculado</label>
+        <select name="templateId">${templateOptions}</select>
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label>Recorrência em horas</label>
+          <input name="recurrenceHours" type="number" min="0" step="1" placeholder="0 para tarefa simples" />
+        </div>
+        <div class="split">
+          <div class="form-row">
+            <label>Início</label>
+            <input name="startHour" type="time" value="08:00" />
+          </div>
+          <div class="form-row">
+            <label>Fim</label>
+            <input name="endHour" type="time" value="18:00" />
+          </div>
+        </div>
+      </div>
+      <button class="primary-button icon-text" type="submit">${iconUi("tasks")} Criar tarefa</button>
+    </form>
+  `;
+}
+
+function openTaskModal() {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal">
+      <div class="modal-head">
+        <div>
+          <h2>Criar tarefa</h2>
+          <p class="muted">Defina o dia, o responsável e um checklist vinculado se precisar.</p>
+        </div>
+        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+      </div>
+      ${renderTaskForm()}
+    </section>
+  `;
+  document.body.appendChild(modal);
 }
 
 function openTemplateModal() {
@@ -1138,6 +1226,7 @@ function submitTemplate(form, data) {
 }
 
 function submitTask(data) {
+  const dueDate = String(data.get("dueDate") || selectedTaskDate || toDateKey(new Date()));
   state.tasks.push({
     id: uid(),
     title: String(data.get("title")).trim(),
@@ -1148,12 +1237,15 @@ function submitTask(data) {
     recurrenceHours: Number(data.get("recurrenceHours") || 0),
     startHour: String(data.get("startHour") || "08:00"),
     endHour: String(data.get("endHour") || "18:00"),
+    dueDate,
     done: false,
     completedLocation: "",
     lastNotifiedAt: null,
     createdAt: new Date().toISOString(),
   });
+  selectedTaskDate = dueDate;
   saveState();
+  closeModal();
   render();
 }
 
@@ -1269,6 +1361,7 @@ function handleGlobalClick(event) {
     render();
   }
   if (action === "open-template-modal") openTemplateModal();
+  if (action === "open-task-modal") openTaskModal();
   if (action === "add-builder-field") addBuilderField();
   if (action === "close-modal") closeModal();
   if (action === "start-fill") {
@@ -1293,6 +1386,14 @@ function handleGlobalClick(event) {
   if (action === "open-company-modal") openUserModal("company");
   if (action === "open-agent-modal") openUserModal("agent");
   if (action === "request-notification") requestNotification();
+  if (action === "select-task-date") {
+    selectedTaskDate = target.dataset.date || selectedTaskDate;
+    render();
+  }
+  if (action === "change-task-month") {
+    selectedTaskDate = shiftTaskMonth(Number(target.dataset.offset || 0));
+    render();
+  }
   if (action === "delete-task") deleteTask(target.dataset.id);
   if (action === "delete-template") deleteTemplate(target.dataset.id);
   if (action === "duplicate-template") duplicateTemplate(target.dataset.id);
@@ -1662,6 +1763,36 @@ function startTaskTicker() {
 
 function userName(id) {
   return state.users.find((user) => user.id === id)?.name || "Usuário";
+}
+
+function taskDateKey(task) {
+  return task.dueDate || toDateKey(task.createdAt || new Date());
+}
+
+function toDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return toDateKey(new Date());
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromKey(key) {
+  const [year, month, day] = String(key).split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+function shiftTaskMonth(offset) {
+  const current = dateFromKey(selectedTaskDate);
+  const target = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+  const day = Math.min(current.getDate(), new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate());
+  target.setDate(day);
+  return toDateKey(target);
+}
+
+function formatDateOnly(key) {
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(dateFromKey(key));
 }
 
 function formatDate(value) {
