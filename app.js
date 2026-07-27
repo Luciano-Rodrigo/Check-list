@@ -1060,12 +1060,22 @@ async function shareSubmissionWhatsapp(id) {
 }
 
 function buildSubmissionPdfBlob(submission) {
+  const stats = reportStats(submission);
   const lines = [
-    "Checklist preenchido",
-    submission.templateTitle,
+    "RELATORIO TECNICO DE CHECKLIST",
+    "",
+    `Checklist: ${submission.templateTitle}`,
     `Data: ${formatDate(submission.createdAt)}`,
     `Preenchido por: ${userName(submission.filledBy)}`,
+    `Registro: ${submission.id}`,
     "",
+    "RESUMO EXECUTIVO",
+    `Total de itens: ${stats.total}`,
+    `Conformes: ${stats.ok}`,
+    `Nao conformes: ${stats.fail}`,
+    `Evidencias registradas: ${stats.evidence}`,
+    "",
+    "ITENS VERIFICADOS",
     ...submission.answers.flatMap((answer, index) => [
       `${index + 1}. ${answer.title}`,
       answer.status ? `Status: ${answer.status === "ok" ? "Correto" : "Incorreto"}` : "",
@@ -1080,10 +1090,10 @@ function buildSubmissionPdfBlob(submission) {
   const wrapped = lines.flatMap((line) => wrapPdfLine(normalizePdfText(line), 82));
   const content = [
     "BT",
-    "/F1 11 Tf",
+    "/F1 10 Tf",
     "46 800 Td",
-    "14 TL",
-    ...wrapped.slice(0, 52).map((line) => `(${pdfEscape(line)}) Tj T*`),
+    "13 TL",
+    ...wrapped.slice(0, 56).map((line) => `(${pdfEscape(line)}) Tj T*`),
     "ET",
   ].join("\n");
   const objects = [
@@ -1291,38 +1301,187 @@ function showReport(id, shouldPrint = false) {
 }
 
 function reportHtml(report) {
+  const stats = reportStats(report);
+  const failed = report.answers.filter((answer) => reportStatusValue(answer) === "fail");
+  const locations = [...new Set(report.answers.map((answer) => answer.location).filter(Boolean))];
   return `
-    <header class="report-cover ${accentClass({ accent: report.templateAccent })} art-${report.templateArtHeader || "clean"} border-${report.templateBorderStyle || "soft"}">
-      <span>${escapeHtml(report.templateCategory || "Operação")}</span>
-      <h1>${escapeHtml(report.templateTitle)}</h1>
-      <p>Check list profissional · Luma</p>
+    <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })}">
+      <div>
+        <span class="report-label">Relatório técnico de checklist</span>
+        <h1>${escapeHtml(report.templateTitle)}</h1>
+        <p>${escapeHtml(report.templateCategory || "Operação")} · Check list profissional Luma</p>
+      </div>
+      <div class="report-code">
+        <strong>REGISTRO</strong>
+        <span>${escapeHtml(shortId(report.id))}</span>
+      </div>
     </header>
-    <section class="report-meta">
-      <div><strong>Preenchido por</strong><span>${escapeHtml(userName(report.filledBy))}</span></div>
-      <div><strong>Data</strong><span>${formatDate(report.createdAt)}</span></div>
-      <div><strong>Registro</strong><span>${escapeHtml(report.id)}</span></div>
+
+    <section class="report-section report-identity">
+      <div>
+        <strong>Responsável pelo preenchimento</strong>
+        <span>${escapeHtml(userName(report.filledBy))}</span>
+      </div>
+      <div>
+        <strong>Data e hora</strong>
+        <span>${formatDate(report.createdAt)}</span>
+      </div>
+      <div>
+        <strong>ID completo</strong>
+        <span>${escapeHtml(report.id)}</span>
+      </div>
+      <div>
+        <strong>Localização registrada</strong>
+        <span>${locations.length ? escapeHtml(locations[0]) : "Não informada"}</span>
+      </div>
     </section>
-    <div class="report-items">
-      ${report.answers.map((answer) => `
-        <section class="report-item">
-          <div class="report-item-head">
-            <h2>${escapeHtml(answer.title)}</h2>
-            ${renderReportStatus(answer)}
-          </div>
-          ${answer.text ? `<p><strong>Observação</strong><span>${escapeHtml(answer.text)}</span></p>` : ""}
-          ${answer.transcript ? `<p><strong>Transcrição</strong><span>${escapeHtml(answer.transcript)}</span></p>` : ""}
-          ${answer.location ? `<p><strong>Localização</strong><span>${escapeHtml(answer.location)}</span></p>` : ""}
-          ${answer.ip ? `<p><strong>IP</strong><span>${escapeHtml(answer.ip)}</span></p>` : ""}
-          <div class="report-media">
-            ${renderReportPhotos(answer)}
-            ${answer.selfieDoc ? `<figure><img src="${answer.selfieDoc}" alt="Documento anexado" /><figcaption>Foto com documento</figcaption></figure>` : ""}
-            ${answer.signature ? `<figure><img src="${answer.signature}" alt="Assinatura" /><figcaption>Assinatura</figcaption></figure>` : ""}
-          </div>
-          ${answer.audio ? `<p><strong>Áudio</strong><audio controls src="${answer.audio}"></audio></p>` : ""}
-        </section>
+
+    <section class="report-summary-grid">
+      <article><span>Total de itens</span><strong>${stats.total}</strong></article>
+      <article><span>Conformes</span><strong>${stats.ok}</strong></article>
+      <article><span>Não conformes</span><strong>${stats.fail}</strong></article>
+      <article><span>Evidências</span><strong>${stats.evidence}</strong></article>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-title">
+        <span>01</span>
+        <h2>Resumo executivo</h2>
+      </div>
+      <p class="report-summary-text">
+        Checklist preenchido com ${stats.total} item(ns). Foram registrados ${stats.ok} item(ns) conforme(s), ${stats.fail} não conforme(s) e ${stats.evidence} evidência(s) operacional(is).
+      </p>
+      ${failed.length ? `
+        <div class="report-alert">
+          <strong>Atenção requerida</strong>
+          <span>${failed.length} item(ns) precisam de análise ou ação corretiva.</span>
+        </div>
+      ` : `
+        <div class="report-ok-box">
+          <strong>Sem não conformidades registradas</strong>
+          <span>O preenchimento não marcou itens como incorretos.</span>
+        </div>
+      `}
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-title">
+        <span>02</span>
+        <h2>Itens verificados</h2>
+      </div>
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Item avaliado</th>
+            <th>Status</th>
+            <th>Evidência / observação</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${report.answers.map((answer, index) => renderReportRow(answer, index)).join("")}
+        </tbody>
+      </table>
+    </section>
+
+    ${renderEvidenceSection(report)}
+
+    <section class="report-section report-signoff">
+      <div class="report-section-title">
+        <span>04</span>
+        <h2>Assinatura e rastreabilidade</h2>
+      </div>
+      ${renderSignatureBlocks(report)}
+    </section>
+  `;
+}
+
+function reportStats(report) {
+  return report.answers.reduce((acc, answer) => {
+    const status = reportStatusValue(answer);
+    const photos = answer.photos?.length ? answer.photos.length : answer.photo ? 1 : 0;
+    acc.total += 1;
+    if (status === "ok") acc.ok += 1;
+    if (status === "fail") acc.fail += 1;
+    if (photos || answer.selfieDoc || answer.signature || answer.audio || answer.text || answer.transcript || answer.location) acc.evidence += 1;
+    return acc;
+  }, { total: 0, ok: 0, fail: 0, evidence: 0 });
+}
+
+function reportStatusValue(answer) {
+  return answer.status || (answer.checked === true ? "ok" : answer.checked === false ? "fail" : "");
+}
+
+function renderReportRow(answer, index) {
+  const evidence = [
+    answer.text,
+    answer.transcript ? `Áudio/transcrição: ${answer.transcript}` : "",
+    answer.location ? `Local: ${answer.location}` : "",
+    answer.photos?.length ? `${answer.photos.length} foto(s)` : "",
+    answer.signature ? "Assinatura registrada" : "",
+  ].filter(Boolean).join(" · ") || "Sem evidência adicional";
+  return `
+    <tr>
+      <td>${index + 1}</td>
+      <td>${escapeHtml(answer.title)}</td>
+      <td>${renderReportStatus(answer)}</td>
+      <td>${escapeHtml(evidence)}</td>
+    </tr>
+  `;
+}
+
+function renderEvidenceSection(report) {
+  const evidence = report.answers.filter((answer) => answerHasMedia(answer));
+  if (!evidence.length) return "";
+  return `
+    <section class="report-section report-evidence-section">
+      <div class="report-section-title">
+        <span>03</span>
+        <h2>Evidências anexadas</h2>
+      </div>
+      <div class="report-evidence-grid">
+        ${evidence.map((answer) => `
+          <article>
+            <h3>${escapeHtml(answer.title)}</h3>
+            <div class="report-media">
+              ${renderReportPhotos(answer)}
+              ${answer.selfieDoc ? `<figure><img src="${answer.selfieDoc}" alt="Documento anexado" /><figcaption>Foto com documento</figcaption></figure>` : ""}
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function answerHasMedia(answer) {
+  return Boolean(answer.photos?.length || answer.photo || answer.selfieDoc);
+}
+
+function renderSignatureBlocks(report) {
+  const signatures = report.answers.filter((answer) => answer.signature);
+  if (!signatures.length) {
+    return `
+      <div class="signature-grid">
+        <div><strong>${escapeHtml(userName(report.filledBy))}</strong><span>Responsável pelo preenchimento</span></div>
+        <div><strong>${formatDate(report.createdAt)}</strong><span>Data do registro</span></div>
+      </div>
+    `;
+  }
+  return `
+    <div class="signature-grid">
+      ${signatures.map((answer) => `
+        <figure>
+          <img src="${answer.signature}" alt="Assinatura" />
+          <figcaption>${escapeHtml(answer.title)}</figcaption>
+        </figure>
       `).join("")}
     </div>
   `;
+}
+
+function shortId(id) {
+  return String(id || "").slice(0, 10).toUpperCase();
 }
 
 function renderReportPhotos(answer) {
