@@ -1050,7 +1050,7 @@ async function shareSubmissionWhatsapp(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
   const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
-  const file = new File([buildSubmissionPdfBlob(submission)], `${safeFileName(submission.templateTitle)}.pdf`, { type: "application/pdf" });
+  const file = new File([await buildSubmissionPdfBlob(submission)], `${safeFileName(submission.templateTitle)}.pdf`, { type: "application/pdf" });
   if (navigator.canShare?.({ files: [file] })) {
     await navigator.share({ files: [file], title: submission.templateTitle, text });
     return;
@@ -1059,63 +1059,67 @@ async function shareSubmissionWhatsapp(id) {
   window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF baixado: anexe o arquivo ${file.name} nesta conversa.`)}`, "_blank", "noopener");
 }
 
-function buildSubmissionPdfBlob(submission) {
+async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
-  const lines = [
+  const pages = [];
+  let currentLines = [];
+  const pushLine = (line = "") => {
+    wrapPdfLine(normalizePdfText(line), 88).forEach((wrapped) => {
+      if (currentLines.length >= 54) {
+        pages.push({ lines: currentLines, images: [] });
+        currentLines = [];
+      }
+      currentLines.push(wrapped);
+    });
+  };
+  [
     "RELATORIO TECNICO DE CHECKLIST",
     "",
     `Checklist: ${submission.templateTitle}`,
+    `Categoria: ${submission.templateCategory || "Operacao"}`,
     `Data: ${formatDate(submission.createdAt)}`,
     `Preenchido por: ${userName(submission.filledBy)}`,
     `Registro: ${submission.id}`,
     "",
     "RESUMO EXECUTIVO",
-    `Total de itens: ${stats.total}`,
-    `Conformes: ${stats.ok}`,
-    `Nao conformes: ${stats.fail}`,
-    `Evidencias registradas: ${stats.evidence}`,
+    `Total de itens: ${stats.total} | Conformes: ${stats.ok} | Nao conformes: ${stats.fail} | Evidencias: ${stats.evidence}`,
     "",
     "ITENS VERIFICADOS",
-    ...submission.answers.flatMap((answer, index) => [
-      `${index + 1}. ${answer.title}`,
-      answer.status ? `Status: ${answer.status === "ok" ? "Correto" : "Incorreto"}` : "",
-      answer.text ? `Observacao: ${answer.text}` : "",
-      answer.transcript ? `Transcricao: ${answer.transcript}` : "",
-      answer.location ? `Localizacao: ${answer.location}` : "",
-      answer.signature ? "Assinatura: registrada" : "",
-      answer.photos?.length ? `Fotos: ${answer.photos.length} anexo(s) registrado(s) no app` : "",
-      "",
-    ]),
-  ].filter((line) => line !== null && line !== undefined);
-  const wrapped = lines.flatMap((line) => wrapPdfLine(normalizePdfText(line), 82));
-  const content = [
-    "BT",
-    "/F1 10 Tf",
-    "46 800 Td",
-    "13 TL",
-    ...wrapped.slice(0, 56).map((line) => `(${pdfEscape(line)}) Tj T*`),
-    "ET",
-  ].join("\n");
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  ].forEach(pushLine);
+  submission.answers.forEach((answer, index) => {
+    pushLine("");
+    pushLine(`${index + 1}. ${answer.title}`);
+    pushLine(`Status: ${pdfStatusLabel(answer)}`);
+    if (answer.text) pushLine(`Observacao: ${answer.text}`);
+    if (answer.transcript) pushLine(`Transcricao do audio: ${answer.transcript}`);
+    if (answer.audio) pushLine("Audio: arquivo registrado no app");
+    if (answer.location) pushLine(`Localizacao: ${answer.location}`);
+    if (answer.ip) pushLine(`IP: ${answer.ip}`);
+    const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
+    if (photos.length) pushLine(`Fotos: ${photos.length} imagem(ns) anexada(s) nas paginas de evidencias.`);
+    if (answer.selfieDoc) pushLine("Foto com documento: registrada nas evidencias.");
+    if (answer.signature) pushLine("Assinatura: registrada nas evidencias.");
   });
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  offsets.slice(1).forEach((offset) => {
-    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  if (currentLines.length) pages.push({ lines: currentLines, images: [] });
+
+  const evidenceImages = [];
+  for (const [answerIndex, answer] of submission.answers.entries()) {
+    const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
+    const entries = [
+      ...photos.map((src, index) => ({ src, label: `Item ${answerIndex + 1} - Foto ${index + 1}: ${answer.title}` })),
+      ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${answerIndex + 1} - Foto com documento: ${answer.title}` }] : []),
+      ...(answer.signature ? [{ src: answer.signature, label: `Item ${answerIndex + 1} - Assinatura: ${answer.title}` }] : []),
+    ];
+    for (const entry of entries) {
+      const image = await dataUrlToPdfJpeg(entry.src);
+      if (image) evidenceImages.push({ ...image, label: entry.label });
+    }
+  }
+  evidenceImages.forEach((image) => {
+    pages.push({ lines: [normalizePdfText(image.label)], images: [image] });
   });
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new Blob([pdf], { type: "application/pdf" });
+
+  return buildPdfDocument(pages);
 }
 
 function normalizePdfText(value) {
@@ -1141,6 +1145,127 @@ function wrapPdfLine(line, maxLength) {
   });
   if (current) rows.push(current);
   return rows;
+}
+
+function pdfStatusLabel(answer) {
+  const status = reportStatusValue(answer);
+  if (status === "ok") return "V - Correto";
+  if (status === "fail") return "X - Incorreto";
+  return answer.kind === "signature" ? "Assinatura solicitada" : "Nao marcado";
+}
+
+function dataUrlToPdfJpeg(src) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const image = new Image();
+    image.onload = () => {
+      const maxWidth = 900;
+      const scale = Math.min(1, maxWidth / image.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+      const base64 = dataUrl.split(",")[1] || "";
+      resolve({
+        bytes: base64ToBytes(base64),
+        width: canvas.width,
+        height: canvas.height,
+      });
+    };
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+}
+
+function buildPdfDocument(pages) {
+  const encoder = new TextEncoder();
+  const objects = [];
+  const pageIds = [];
+  const addObject = (body) => {
+    objects.push(typeof body === "string" ? encoder.encode(body) : body);
+    return objects.length;
+  };
+  addObject("");
+  addObject("");
+  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  pages.forEach((page) => {
+    const imageRefs = page.images.map((image) => {
+      const id = addObject(pdfStreamObject(image.bytes, `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>`));
+      return { ...image, id };
+    });
+    const content = pdfPageContent(page.lines, imageRefs);
+    const contentId = addObject(pdfStreamObject(encoder.encode(content), `<< /Length ${encoder.encode(content).length} >>`));
+    const xObjects = imageRefs.length
+      ? `/XObject << ${imageRefs.map((image, index) => `/Im${index + 1} ${image.id} 0 R`).join(" ")} >>`
+      : "";
+    const pageId = addObject(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> ${xObjects} >> /Contents ${contentId} 0 R >>`);
+    pageIds.push(pageId);
+  });
+  objects[0] = encoder.encode("<< /Type /Catalog /Pages 2 0 R >>");
+  objects[1] = encoder.encode(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
+
+  const chunks = [encoder.encode("%PDF-1.4\n")];
+  const offsets = [0];
+  let length = chunks[0].length;
+  objects.forEach((object, index) => {
+    offsets.push(length);
+    const header = encoder.encode(`${index + 1} 0 obj\n`);
+    const footer = encoder.encode("\nendobj\n");
+    chunks.push(header, object, footer);
+    length += header.length + object.length + footer.length;
+  });
+  const xrefOffset = length;
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    xref += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  chunks.push(encoder.encode(xref));
+  return new Blob(chunks, { type: "application/pdf" });
+}
+
+function pdfStreamObject(bytes, dictionary) {
+  const encoder = new TextEncoder();
+  const prefix = encoder.encode(`${dictionary}\nstream\n`);
+  const suffix = encoder.encode("\nendstream");
+  const merged = new Uint8Array(prefix.length + bytes.length + suffix.length);
+  merged.set(prefix, 0);
+  merged.set(bytes, prefix.length);
+  merged.set(suffix, prefix.length + bytes.length);
+  return merged;
+}
+
+function pdfPageContent(lines, images) {
+  const commands = [
+    "BT",
+    "/F1 10 Tf",
+    "46 800 Td",
+    "13 TL",
+    ...lines.map((line) => `(${pdfEscape(line)}) Tj T*`),
+    "ET",
+  ];
+  images.forEach((image, index) => {
+    const maxW = 500;
+    const maxH = 560;
+    const scale = Math.min(maxW / image.width, maxH / image.height);
+    const width = Math.round(image.width * scale);
+    const height = Math.round(image.height * scale);
+    const x = Math.round((595 - width) / 2);
+    const y = 92;
+    commands.push("q", `${width} 0 0 ${height} ${x} ${y} cm`, `/Im${index + 1} Do`, "Q");
+  });
+  return commands.join("\n");
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 function pdfEscape(value) {
@@ -1193,7 +1318,13 @@ function renderRuntimeField(field) {
           ${options.text ? `<button class="tool-icon" data-action="open-observation-modal" data-field="${field.id}" type="button" title="Observações">${iconChat()}</button>` : ""}
           ${options.audio ? `<button class="tool-icon" data-action="start-audio" data-field="${field.id}" type="button" title="Gravar áudio">${iconMic()}</button>` : ""}
         </div>
-        ${isSignature ? `<div class="signature-inline"><label>Assinatura</label><canvas class="signature-pad" data-signature="${field.id}"></canvas><input type="hidden" name="${field.id}_signature" /></div>` : ""}
+        ${isSignature ? `
+          <div class="signature-inline">
+            <button class="primary-button signature-open-button" data-action="open-signature-modal" data-field="${field.id}" type="button">Assinar</button>
+            <div class="signature-preview empty-signature" data-signature-preview="${field.id}">Assinatura ainda não registrada.</div>
+            <input type="hidden" name="${field.id}_signature" />
+          </div>
+        ` : ""}
       </div>
       ${options.text ? `<input type="hidden" name="${field.id}_text" /><div class="evidence-note hidden" data-note-preview="${field.id}"></div>` : ""}
       ${options.photo ? `<input class="hidden-file" name="${field.id}_photo_input" data-photo-input="${field.id}" type="file" accept="image/*" multiple /><input type="hidden" name="${field.id}_photos" value="[]" /><div class="photo-strip" data-photo-strip="${field.id}"></div>` : ""}
@@ -1228,7 +1359,7 @@ function hydrateSubmissionForm(submission) {
     const locationNote = document.querySelector(`[data-location-note="${fieldId}"]`);
     if (locationNote && answer.location) locationNote.textContent = `Localização capturada: ${answer.location}`;
     setInputValue(`${fieldId}_signature`, answer.signature || "");
-    if (answer.signature) drawSignaturePreview(fieldId, answer.signature);
+    if (answer.signature) renderSignaturePreview(fieldId, answer.signature);
     setInputValue(`${fieldId}_selfieDoc_existing`, answer.selfieDoc || "");
   });
 }
@@ -1238,12 +1369,72 @@ function setInputValue(name, value) {
   if (input) input.value = value;
 }
 
-function drawSignaturePreview(fieldId, src) {
-  const canvas = document.querySelector(`[data-signature="${fieldId}"]`);
-  if (!canvas) return;
+function renderSignaturePreview(fieldId, src) {
+  const preview = document.querySelector(`[data-signature-preview="${fieldId}"]`);
+  if (!preview || !src) return;
+  preview.classList.remove("empty-signature");
+  preview.innerHTML = `<img src="${src}" alt="Assinatura registrada" />`;
+}
+
+function openSignatureModal(fieldId) {
+  const title = document.querySelector(`[data-field-id="${fieldId}"] h3`)?.textContent || "Assinatura";
+  const existing = document.querySelector(`input[name="${fieldId}_signature"]`)?.value || "";
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop signature-backdrop";
+  modal.innerHTML = `
+    <section class="modal signature-modal">
+      <div class="signature-modal-head">
+        <div>
+          <span class="template-kicker">Assinatura</span>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+        <button class="icon-button" data-action="close-this-modal" type="button" title="Fechar">×</button>
+      </div>
+      <div class="signature-board">
+        <canvas class="signature-pad signature-pad-large" data-signature="${fieldId}"></canvas>
+        <input type="hidden" name="${fieldId}_signature_temp" value="${escapeHtml(existing)}" />
+      </div>
+      <div class="signature-floating-actions">
+        <button class="secondary-button" data-action="clear-signature" data-field="${fieldId}" type="button">Limpar</button>
+        <button class="primary-button signature-done-button" data-action="save-signature" data-field="${fieldId}" type="button">Concluir</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+  const canvas = modal.querySelector(".signature-pad");
+  setupSignaturePad(canvas);
+  if (existing) drawSignatureOnCanvas(canvas, existing);
+}
+
+function saveSignature(fieldId) {
+  const modal = document.querySelector(".signature-backdrop");
+  const temp = modal?.querySelector(`input[name="${fieldId}_signature_temp"]`)?.value || "";
+  if (!temp) return alert("Faça a assinatura antes de concluir.");
+  setInputValue(`${fieldId}_signature`, temp);
+  renderSignaturePreview(fieldId, temp);
+  captureLocation(fieldId, { silent: true });
+  modal?.remove();
+}
+
+function clearSignature(fieldId) {
+  const modal = document.querySelector(".signature-backdrop");
+  const canvas = modal?.querySelector(`[data-signature="${fieldId}"]`);
+  const input = modal?.querySelector(`input[name="${fieldId}_signature_temp"]`);
+  if (!canvas || !input) return;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  input.value = "";
+}
+
+function drawSignatureOnCanvas(canvas, src) {
   const ctx = canvas.getContext("2d");
   const image = new Image();
-  image.onload = () => ctx.drawImage(image, 0, 0, canvas.width / devicePixelRatio, canvas.height / devicePixelRatio);
+  image.onload = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width / devicePixelRatio, canvas.height / devicePixelRatio);
+  };
   image.src = src;
 }
 
@@ -1742,6 +1933,9 @@ function handleGlobalClick(event) {
   if (action === "remove-photo") removePhoto(target.dataset.field, Number(target.dataset.index));
   if (action === "open-observation-modal") openObservationModal(target.dataset.field);
   if (action === "save-observation") saveObservation(target.dataset.field);
+  if (action === "open-signature-modal") openSignatureModal(target.dataset.field);
+  if (action === "save-signature") saveSignature(target.dataset.field);
+  if (action === "clear-signature") clearSignature(target.dataset.field);
   if (action === "close-this-modal") target.closest(".modal-backdrop")?.remove();
   if (action === "capture-location") captureLocation(target.dataset.field);
   if (action === "start-audio") startAudio(target.dataset.field);
@@ -2057,54 +2251,59 @@ function startSpeechRecognition(fieldId) {
 }
 
 function setupSignaturePads() {
-  document.querySelectorAll(".signature-pad").forEach((canvas) => {
-    const ctx = canvas.getContext("2d");
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * devicePixelRatio;
-      canvas.height = rect.height * devicePixelRatio;
-      ctx.scale(devicePixelRatio, devicePixelRatio);
-      ctx.lineWidth = 2;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = document.documentElement.dataset.theme === "dark" ? "#f3f6f8" : "#17202a";
+  document.querySelectorAll(".signature-pad").forEach(setupSignaturePad);
+}
+
+function setupSignaturePad(canvas) {
+  if (!canvas || canvas.dataset.ready === "true") return;
+  canvas.dataset.ready = "true";
+  const ctx = canvas.getContext("2d");
+  const resize = () => {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * devicePixelRatio;
+    canvas.height = rect.height * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = document.documentElement.dataset.theme === "dark" ? "#f3f6f8" : "#17202a";
+  };
+  resize();
+  let drawing = false;
+  const point = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const touch = event.touches?.[0];
+    return {
+      x: (touch?.clientX ?? event.clientX) - rect.left,
+      y: (touch?.clientY ?? event.clientY) - rect.top,
     };
-    resize();
-    let drawing = false;
-    const point = (event) => {
-      const rect = canvas.getBoundingClientRect();
-      const touch = event.touches?.[0];
-      return {
-        x: (touch?.clientX ?? event.clientX) - rect.left,
-        y: (touch?.clientY ?? event.clientY) - rect.top,
-      };
-    };
-    const start = (event) => {
-      drawing = true;
-      const p = point(event);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      event.preventDefault();
-    };
-    const move = (event) => {
-      if (!drawing) return;
-      const p = point(event);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      canvas.nextElementSibling.value = canvas.toDataURL("image/png");
-      event.preventDefault();
-    };
-    const end = () => {
-      drawing = false;
-      canvas.nextElementSibling.value = canvas.toDataURL("image/png");
-      captureLocation(canvas.dataset.signature, { silent: true });
-    };
-    canvas.addEventListener("mousedown", start);
-    canvas.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", end);
-    canvas.addEventListener("touchstart", start, { passive: false });
-    canvas.addEventListener("touchmove", move, { passive: false });
-    canvas.addEventListener("touchend", end);
-  });
+  };
+  const start = (event) => {
+    drawing = true;
+    const p = point(event);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    event.preventDefault();
+  };
+  const move = (event) => {
+    if (!drawing) return;
+    const p = point(event);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    canvas.nextElementSibling.value = canvas.toDataURL("image/png");
+    event.preventDefault();
+  };
+  const end = () => {
+    if (!drawing) return;
+    drawing = false;
+    canvas.nextElementSibling.value = canvas.toDataURL("image/png");
+  };
+  canvas.addEventListener("mousedown", start);
+  canvas.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  canvas.addEventListener("touchstart", start, { passive: false });
+  canvas.addEventListener("touchmove", move, { passive: false });
+  canvas.addEventListener("touchend", end);
 }
 
 function previewFile(input) {
