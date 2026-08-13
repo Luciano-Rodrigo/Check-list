@@ -1128,6 +1128,13 @@ async function shareSubmissionWhatsapp(id) {
   window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF baixado: anexe o arquivo ${file.name} nesta conversa.`)}`, "_blank", "noopener");
 }
 
+async function exportSubmissionPdf(id) {
+  const submission = state.submissions.find((item) => item.id === id);
+  if (!submission) return;
+  const blob = await buildSubmissionPdfBlob(submission);
+  downloadBlob(blob, `${safeFileName(submission.templateTitle)}.pdf`);
+}
+
 async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
   const labels = statusLabels(submission);
@@ -1564,7 +1571,7 @@ function showReport(id, shouldPrint = false) {
           <p>${formatDate(report.createdAt)}</p>
         </div>
         <div class="toolbar">
-          <button class="primary-button icon-text" data-action="browser-print" type="button">${iconUi("pdf")} Gerar PDF</button>
+          <button class="primary-button icon-text" data-action="download-report-pdf" data-id="${report.id}" type="button">${iconUi("pdf")} Baixar PDF</button>
           <button class="icon-button" data-action="close-modal" type="button">×</button>
         </div>
       </div>
@@ -1572,7 +1579,7 @@ function showReport(id, shouldPrint = false) {
     </section>
   `;
   document.body.appendChild(modal);
-  if (shouldPrint) setTimeout(() => window.print(), 150);
+  if (shouldPrint) exportSubmissionPdf(report.id);
 }
 
 function reportHtml(report) {
@@ -2060,13 +2067,14 @@ function handleGlobalClick(event) {
   if (action === "edit-submission") editSubmission(target.dataset.id);
   if (action === "print-report") showReport(target.dataset.id, true);
   if (action === "delete-submission") deleteSubmission(target.dataset.id);
-  if (action === "browser-print") window.print();
+  if (action === "browser-print") exportSubmissionPdf(target.dataset.id);
+  if (action === "download-report-pdf") exportSubmissionPdf(target.dataset.id);
   if (action === "share-whatsapp") {
     shareSubmissionWhatsapp(target.dataset.id).catch((error) => {
       if (error?.name !== "AbortError") alert("Não foi possível abrir o compartilhamento do PDF.");
     });
   }
-  if (action === "success-pdf") showReport(target.dataset.id, true);
+  if (action === "success-pdf") exportSubmissionPdf(target.dataset.id);
   if (action === "go-dashboard") {
     closeAllModals();
     currentPage = "dashboard";
