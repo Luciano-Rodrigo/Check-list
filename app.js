@@ -167,6 +167,10 @@ function migrateState(nextState) {
     tpl.artHeader ||= "clean";
     tpl.borderStyle ||= "soft";
     tpl.assignedAgentIds ||= [];
+    tpl.statusOkLabel ||= "Correto";
+    tpl.statusFailLabel ||= "Incorreto";
+    tpl.statusOkIcon ||= "check";
+    tpl.statusFailIcon ||= "close";
   });
   nextState.tasks.forEach((task) => {
     task.templateId ||= "";
@@ -572,6 +576,31 @@ function accentClass(tpl) {
   return `accent-${tpl.accent || "blue"}`;
 }
 
+function statusLabels(tpl = {}) {
+  return {
+    okLabel: tpl.statusOkLabel || "Correto",
+    failLabel: tpl.statusFailLabel || "Incorreto",
+    okIcon: tpl.statusOkIcon || "check",
+    failIcon: tpl.statusFailIcon || "close",
+  };
+}
+
+function statusChoiceIcon(name) {
+  const icons = {
+    check: iconUi("check"),
+    "double-check": `<span class="status-symbol">VV</span>`,
+    thumb: `<span class="status-symbol">OK</span>`,
+    star: `<span class="status-symbol">*</span>`,
+    shield: `<span class="status-symbol">#</span>`,
+    close: iconUi("close"),
+    alert: `<span class="status-symbol">!</span>`,
+    flag: `<span class="status-symbol">F</span>`,
+    wrench: `<span class="status-symbol">A</span>`,
+    ban: `<span class="status-symbol">B</span>`,
+  };
+  return icons[name] || iconUi("check");
+}
+
 function iconCamera() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h2l1.2-1.6A1 1 0 0 1 10.5 4h3a1 1 0 0 1 .8.4L15.5 6h2A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>`;
 }
@@ -927,6 +956,30 @@ function openTemplateModal(templateId = "") {
             </select>
           </div>
         </div>
+        <div class="split">
+          <div class="form-row">
+            <label>Nome da marcação positiva</label>
+            <input name="statusOkLabel" value="${escapeHtml(editing?.statusOkLabel || "Correto")}" placeholder="Ex.: Aprovado, Conforme, OK" />
+          </div>
+          <div class="form-row">
+            <label>Ícone positivo</label>
+            <select name="statusOkIcon">
+              ${renderSelectedOptions(statusIconOptions("ok"), editing?.statusOkIcon || "check")}
+            </select>
+          </div>
+        </div>
+        <div class="split">
+          <div class="form-row">
+            <label>Nome da marcação negativa</label>
+            <input name="statusFailLabel" value="${escapeHtml(editing?.statusFailLabel || "Incorreto")}" placeholder="Ex.: Reprovado, Ajustar, Falhou" />
+          </div>
+          <div class="form-row">
+            <label>Ícone negativo</label>
+            <select name="statusFailIcon">
+              ${renderSelectedOptions(statusIconOptions("fail"), editing?.statusFailIcon || "close")}
+            </select>
+          </div>
+        </div>
         <div class="form-row">
           <label>Descrição</label>
           <textarea name="description">${escapeHtml(editing?.description || "")}</textarea>
@@ -955,6 +1008,12 @@ function openTemplateModal(templateId = "") {
 
 function renderSelectedOptions(options, selectedValue) {
   return options.map(([value, label]) => `<option value="${value}" ${value === selectedValue ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function statusIconOptions(kind) {
+  return kind === "ok"
+    ? [["check", "V / check"], ["double-check", "Duplo check"], ["thumb", "Polegar"], ["star", "Estrela"], ["shield", "Escudo"]]
+    : [["close", "X"], ["alert", "Alerta"], ["flag", "Bandeira"], ["wrench", "Ajuste"], ["ban", "Bloqueado"]];
 }
 
 function addBuilderField(seed) {
@@ -987,7 +1046,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
         </div>
       </div>
       <form class="form" data-form="submission" data-template-id="${tpl.id}" data-task-id="${taskId}" data-submission-id="${submissionId}">
-        ${tpl.fields.map(renderRuntimeField).join("")}
+        ${tpl.fields.map((field) => renderRuntimeField(field, tpl)).join("")}
         <button class="primary-button icon-text" type="submit">${editing ? iconUi("edit") : iconUi("check")} ${editing ? "Salvar edição" : "Finalizar checklist"}</button>
       </form>
     </section>
@@ -1061,6 +1120,7 @@ async function shareSubmissionWhatsapp(id) {
 
 async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
+  const labels = statusLabels(submission);
   const pages = [];
   let currentLines = [];
   const pushLine = (line = "") => {
@@ -1082,14 +1142,14 @@ async function buildSubmissionPdfBlob(submission) {
     `Registro: ${submission.id}`,
     "",
     "RESUMO EXECUTIVO",
-    `Total de itens: ${stats.total} | Conformes: ${stats.ok} | Nao conformes: ${stats.fail} | Evidencias: ${stats.evidence}`,
+    `Total de itens: ${stats.total} | ${labels.okLabel}: ${stats.ok} | ${labels.failLabel}: ${stats.fail} | Evidencias: ${stats.evidence}`,
     "",
     "ITENS VERIFICADOS",
   ].forEach(pushLine);
-  submission.answers.forEach((answer, index) => {
+  for (const [index, answer] of submission.answers.entries()) {
     pushLine("");
     pushLine(`${index + 1}. ${answer.title}`);
-    pushLine(`Status: ${pdfStatusLabel(answer)}`);
+    pushLine(`${pdfStatusLabel(submission, answer)}`);
     if (answer.text) pushLine(`Observacao: ${answer.text}`);
     if (answer.transcript) pushLine(`Transcricao do audio: ${answer.transcript}`);
     if (answer.audio) pushLine("Audio: arquivo registrado no app");
@@ -1099,25 +1159,21 @@ async function buildSubmissionPdfBlob(submission) {
     if (photos.length) pushLine(`Fotos: ${photos.length} imagem(ns) anexada(s) nas paginas de evidencias.`);
     if (answer.selfieDoc) pushLine("Foto com documento: registrada nas evidencias.");
     if (answer.signature) pushLine("Assinatura: registrada nas evidencias.");
-  });
-  if (currentLines.length) pages.push({ lines: currentLines, images: [] });
-
-  const evidenceImages = [];
-  for (const [answerIndex, answer] of submission.answers.entries()) {
-    const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
     const entries = [
-      ...photos.map((src, index) => ({ src, label: `Item ${answerIndex + 1} - Foto ${index + 1}: ${answer.title}` })),
-      ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${answerIndex + 1} - Foto com documento: ${answer.title}` }] : []),
-      ...(answer.signature ? [{ src: answer.signature, label: `Item ${answerIndex + 1} - Assinatura: ${answer.title}` }] : []),
+      ...photos.map((src, photoIndex) => ({ src, label: `Item ${index + 1} - Foto ${photoIndex + 1}: ${answer.title}` })),
+      ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${index + 1} - Foto com documento: ${answer.title}` }] : []),
+      ...(answer.signature ? [{ src: answer.signature, label: `Item ${index + 1} - Assinatura: ${answer.title}` }] : []),
     ];
+    if (entries.length && currentLines.length) {
+      pages.push({ lines: currentLines, images: [] });
+      currentLines = [];
+    }
     for (const entry of entries) {
       const image = await dataUrlToPdfJpeg(entry.src);
-      if (image) evidenceImages.push({ ...image, label: entry.label });
+      if (image) pages.push({ lines: [normalizePdfText(entry.label)], images: [image] });
     }
   }
-  evidenceImages.forEach((image) => {
-    pages.push({ lines: [normalizePdfText(image.label)], images: [image] });
-  });
+  if (currentLines.length) pages.push({ lines: currentLines, images: [] });
 
   return buildPdfDocument(pages);
 }
@@ -1147,11 +1203,28 @@ function wrapPdfLine(line, maxLength) {
   return rows;
 }
 
-function pdfStatusLabel(answer) {
+function pdfStatusLabel(report, answer) {
   const status = reportStatusValue(answer);
-  if (status === "ok") return "V - Correto";
-  if (status === "fail") return "X - Incorreto";
+  const labels = statusLabels(report);
+  if (status === "ok") return `${pdfIconLabel(labels.okIcon)} ${labels.okLabel}`;
+  if (status === "fail") return `${pdfIconLabel(labels.failIcon)} ${labels.failLabel}`;
   return answer.kind === "signature" ? "Assinatura solicitada" : "Nao marcado";
+}
+
+function pdfIconLabel(icon) {
+  const icons = {
+    check: "V",
+    "double-check": "VV",
+    thumb: "OK",
+    star: "*",
+    shield: "#",
+    close: "X",
+    alert: "!",
+    flag: "F",
+    wrench: "A",
+    ban: "B",
+  };
+  return icons[icon] || "V";
 }
 
 function dataUrlToPdfJpeg(src) {
@@ -1298,17 +1371,18 @@ function selectCheckStatus(fieldId, value, options = {}) {
   if (!options.skipLocation) captureLocation(fieldId, { silent: true });
 }
 
-function renderRuntimeField(field) {
+function renderRuntimeField(field, tpl = {}) {
   const options = field.options || {};
   const isSignature = field.kind === "signature";
+  const labels = statusLabels(tpl);
   return `
     <fieldset class="runtime-field ${isSignature ? "signature-field" : ""}" data-field-id="${field.id}">
       <div class="inspection-card">
         ${isSignature ? `<span class="field-kind-icon">${iconUi("edit")}</span>` : ""}
         <div class="inspection-status">
           ${options.check ? `
-            <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="Correto" aria-label="Correto">${iconUi("check")}</button>
-            <button class="status-button fail" data-action="select-check-status" data-field="${field.id}" data-value="fail" type="button" title="Incorreto" aria-label="Incorreto">${iconUi("close")}</button>
+            <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="${escapeHtml(labels.okLabel)}" aria-label="${escapeHtml(labels.okLabel)}">${statusChoiceIcon(labels.okIcon)}</button>
+            <button class="status-button fail" data-action="select-check-status" data-field="${field.id}" data-value="fail" type="button" title="${escapeHtml(labels.failLabel)}" aria-label="${escapeHtml(labels.failLabel)}">${statusChoiceIcon(labels.failIcon)}</button>
             <input type="hidden" name="${field.id}_status" />
           ` : ""}
         </div>
@@ -1493,6 +1567,7 @@ function showReport(id, shouldPrint = false) {
 
 function reportHtml(report) {
   const stats = reportStats(report);
+  const labels = statusLabels(report);
   const failed = report.answers.filter((answer) => reportStatusValue(answer) === "fail");
   const locations = [...new Set(report.answers.map((answer) => answer.location).filter(Boolean))];
   return `
@@ -1529,8 +1604,8 @@ function reportHtml(report) {
 
     <section class="report-summary-grid">
       <article><span>Total de itens</span><strong>${stats.total}</strong></article>
-      <article><span>Conformes</span><strong>${stats.ok}</strong></article>
-      <article><span>Não conformes</span><strong>${stats.fail}</strong></article>
+      <article><span>${escapeHtml(labels.okLabel)}</span><strong>${stats.ok}</strong></article>
+      <article><span>${escapeHtml(labels.failLabel)}</span><strong>${stats.fail}</strong></article>
       <article><span>Evidências</span><strong>${stats.evidence}</strong></article>
     </section>
 
@@ -1540,7 +1615,7 @@ function reportHtml(report) {
         <h2>Resumo executivo</h2>
       </div>
       <p class="report-summary-text">
-        Checklist preenchido com ${stats.total} item(ns). Foram registrados ${stats.ok} item(ns) conforme(s), ${stats.fail} não conforme(s) e ${stats.evidence} evidência(s) operacional(is).
+        Checklist preenchido com ${stats.total} item(ns). Foram registrados ${stats.ok} item(ns) como ${escapeHtml(labels.okLabel)}, ${stats.fail} como ${escapeHtml(labels.failLabel)} e ${stats.evidence} evidência(s) operacional(is).
       </p>
       ${failed.length ? `
         <div class="report-alert">
@@ -1560,26 +1635,14 @@ function reportHtml(report) {
         <span>02</span>
         <h2>Itens verificados</h2>
       </div>
-      <table class="report-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Item avaliado</th>
-            <th>Status</th>
-            <th>Evidência / observação</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${report.answers.map((answer, index) => renderReportRow(answer, index)).join("")}
-        </tbody>
-      </table>
+      <div class="report-check-list">
+        ${report.answers.map((answer, index) => renderReportItemCard(report, answer, index)).join("")}
+      </div>
     </section>
-
-    ${renderEvidenceSection(report)}
 
     <section class="report-section report-signoff">
       <div class="report-section-title">
-        <span>04</span>
+        <span>03</span>
         <h2>Assinatura e rastreabilidade</h2>
       </div>
       ${renderSignatureBlocks(report)}
@@ -1618,6 +1681,39 @@ function renderReportRow(answer, index) {
       <td>${renderReportStatus(answer)}</td>
       <td>${escapeHtml(evidence)}</td>
     </tr>
+  `;
+}
+
+function renderReportItemCard(report, answer, index) {
+  const notes = [
+    answer.text ? ["Observação", answer.text] : null,
+    answer.transcript ? ["Descrição do áudio", answer.transcript] : null,
+    answer.audio ? ["Áudio", "Arquivo de áudio registrado no app."] : null,
+    answer.location ? ["Localização", answer.location] : null,
+    answer.ip ? ["IP", answer.ip] : null,
+    answer.signature ? ["Assinatura", "Assinatura registrada."] : null,
+  ].filter(Boolean);
+  const media = [
+    renderReportPhotos(answer),
+    answer.selfieDoc ? `<figure><img src="${answer.selfieDoc}" alt="Documento anexado" /><figcaption>Foto com documento</figcaption></figure>` : "",
+    answer.signature ? `<figure><img src="${answer.signature}" alt="Assinatura" /><figcaption>Assinatura</figcaption></figure>` : "",
+  ].join("");
+  return `
+    <article class="report-check-card">
+      <div class="report-check-head">
+        <div>
+          <span>Item ${index + 1}</span>
+          <h3>${escapeHtml(answer.title)}</h3>
+        </div>
+        ${renderReportStatus(answer, report)}
+      </div>
+      ${notes.length ? `
+        <div class="report-note-grid">
+          ${notes.map(([label, value]) => `<p><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></p>`).join("")}
+        </div>
+      ` : `<p class="report-muted-line">Sem observações adicionais.</p>`}
+      ${media.trim() ? `<div class="report-media report-media-under-item">${media}</div>` : ""}
+    </article>
   `;
 }
 
@@ -1680,10 +1776,11 @@ function renderReportPhotos(answer) {
   return photos.map((src, index) => `<figure><img src="${src}" alt="Foto anexada ${index + 1}" /><figcaption>Foto ${index + 1}</figcaption></figure>`).join("");
 }
 
-function renderReportStatus(answer) {
+function renderReportStatus(answer, report = {}) {
   const status = answer.status || (answer.checked === true ? "ok" : answer.checked === false ? "fail" : "");
-  if (status === "ok") return `<span class="report-status ok">✓ Correto</span>`;
-  if (status === "fail") return `<span class="report-status fail">× Incorreto</span>`;
+  const labels = statusLabels(report);
+  if (status === "ok") return `<span class="report-status ok">${statusChoiceIcon(labels.okIcon)} ${escapeHtml(labels.okLabel)}</span>`;
+  if (status === "fail") return `<span class="report-status fail">${statusChoiceIcon(labels.failIcon)} ${escapeHtml(labels.failLabel)}</span>`;
   return "";
 }
 
@@ -1770,6 +1867,10 @@ function submitTemplate(form, data) {
     accent: String(data.get("accent") || "blue"),
     artHeader: String(data.get("artHeader") || "clean"),
     borderStyle: String(data.get("borderStyle") || "soft"),
+    statusOkLabel: String(data.get("statusOkLabel") || "Correto").trim() || "Correto",
+    statusFailLabel: String(data.get("statusFailLabel") || "Incorreto").trim() || "Incorreto",
+    statusOkIcon: String(data.get("statusOkIcon") || "check"),
+    statusFailIcon: String(data.get("statusFailIcon") || "close"),
     ownerId: existing?.ownerId || currentUser.id,
     companyId: existing?.companyId || currentUser.companyId,
     assignedAgentIds: data.getAll("agentIds"),
@@ -1859,6 +1960,10 @@ async function submitChecklist(form, data) {
     templateCategory: tpl.category || "Operação",
     templateArtHeader: tpl.artHeader || "clean",
     templateBorderStyle: tpl.borderStyle || "soft",
+    statusOkLabel: tpl.statusOkLabel || "Correto",
+    statusFailLabel: tpl.statusFailLabel || "Incorreto",
+    statusOkIcon: tpl.statusOkIcon || "check",
+    statusFailIcon: tpl.statusFailIcon || "close",
     taskId: form.dataset.taskId || "",
     companyId: tpl.companyId,
     filledBy: currentUser.id,
