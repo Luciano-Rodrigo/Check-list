@@ -1033,6 +1033,8 @@ textarea {
   font-family: Arial, Helvetica, sans-serif;
   font-size: 10.5pt;
   line-height: 1.42;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
 }
 
 .report-a4-cover {
@@ -1045,6 +1047,8 @@ textarea {
   color: #fff;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--accent-color, #175cd3) 84%, #111827), #111827);
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
 }
 
 .report-label {
@@ -1780,7 +1784,7 @@ textarea {
 
 @page {
   size: A4;
-  margin: 0;
+  margin: 10mm;
 }
 
 .empty {
@@ -2151,8 +2155,37 @@ textarea {
 }
 
 @media print {
+  html,
+  body {
+    width: auto;
+    min-height: auto;
+    margin: 0;
+    background: #fff !important;
+  }
+
   body * {
     visibility: hidden;
+  }
+
+  .modal-backdrop,
+  .modal {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .modal > .topbar {
+    display: none !important;
   }
 
   #print-area,
@@ -2161,11 +2194,22 @@ textarea {
   }
 
   #print-area {
-    position: absolute;
-    inset: 0 auto auto 0;
-    width: 210mm;
-    min-height: 297mm;
+    position: static !important;
+    width: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
     box-shadow: none;
     border-radius: 0;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .report-section,
+  .report-check-card,
+  .signature-grid figure,
+  .signature-grid > div {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

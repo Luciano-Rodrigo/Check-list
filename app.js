@@ -576,6 +576,16 @@ function accentClass(tpl) {
   return `accent-${tpl.accent || "blue"}`;
 }
 
+function accentColor(tpl = {}) {
+  return {
+    blue: "#175cd3",
+    teal: "#008579",
+    violet: "#7950f2",
+    amber: "#b76e00",
+    rose: "#c43c64",
+  }[tpl.accent || "blue"] || "#175cd3";
+}
+
 function statusLabels(tpl = {}) {
   return {
     okLabel: tpl.statusOkLabel || "Correto",
@@ -1570,8 +1580,9 @@ function reportHtml(report) {
   const labels = statusLabels(report);
   const failed = report.answers.filter((answer) => reportStatusValue(answer) === "fail");
   const locations = [...new Set(report.answers.map((answer) => answer.location).filter(Boolean))];
+  const reportAccent = accentColor({ accent: report.templateAccent });
   return `
-    <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })}">
+    <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })}" style="--accent-color:${reportAccent}; background:linear-gradient(135deg, ${reportAccent}, #111827);">
       <div>
         <span class="report-label">Relatório técnico de checklist</span>
         <h1>${escapeHtml(report.templateTitle)}</h1>
