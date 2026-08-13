@@ -902,6 +902,18 @@ textarea {
   align-items: center;
 }
 
+.header-field-head {
+  grid-template-columns: 1fr 130px auto 40px;
+}
+
+.builder-header-grid {
+  margin: 8px 0;
+}
+
+.header-builder-field {
+  padding: 10px;
+}
+
 .field-options,
 .checkline {
   display: flex;
@@ -939,6 +951,32 @@ textarea {
 
 .runtime-field legend {
   padding: 0 8px;
+}
+
+.checklist-header-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line));
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--primary) 8%, transparent), transparent),
+    var(--surface);
+}
+
+.checklist-header-card h3 {
+  margin: 2px 0 0;
+  font-size: 1rem;
+}
+
+.checklist-header-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.header-runtime-field textarea {
+  min-height: 72px;
 }
 
 .status-picker {
@@ -2037,6 +2075,14 @@ textarea {
 
   .field-head,
   .task-row {
+    grid-template-columns: 1fr;
+  }
+
+  .checklist-header-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .header-field-head {
     grid-template-columns: 1fr;
   }
 

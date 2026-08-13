@@ -171,6 +171,7 @@ function migrateState(nextState) {
     tpl.statusFailLabel ||= "Incorreto";
     tpl.statusOkIcon ||= "check";
     tpl.statusFailIcon ||= "close";
+    tpl.headerFields ||= [];
   });
   nextState.tasks.forEach((task) => {
     task.templateId ||= "";
@@ -994,6 +995,12 @@ function openTemplateModal(templateId = "") {
           <label>Descrição</label>
           <textarea name="description">${escapeHtml(editing?.description || "")}</textarea>
         </div>
+        <div class="form-row">
+          <label>CabeÃ§alho do preenchimento</label>
+          <span class="small">Campos que aparecem antes dos itens, como cliente, OS, equipamento ou endereÃ§o.</span>
+          <div id="builder-header-fields" class="grid builder-header-grid"></div>
+          <button class="secondary-button" data-action="add-header-field" type="button">Adicionar campo de cabeÃ§alho</button>
+        </div>
         ${currentUser.role === "company" ? `
           <div class="form-row">
             <label>Agentes com acesso</label>
@@ -1012,6 +1019,7 @@ function openTemplateModal(templateId = "") {
     </section>
   `;
   document.body.appendChild(modal);
+  (editing?.headerFields || []).forEach(addHeaderFieldClean);
   if (editing?.fields?.length) editing.fields.forEach(addBuilderField);
   else addBuilderField();
 }
@@ -1040,6 +1048,52 @@ function addBuilderField(seed) {
   holder.appendChild(node);
 }
 
+function addHeaderField(seed = {}) {
+  const holder = document.getElementById("builder-header-fields");
+  if (!holder) return;
+  const node = document.createElement("div");
+  node.className = "builder-field header-builder-field";
+  node.innerHTML = `
+    <div class="field-head header-field-head">
+      <input class="header-field-label" type="text" placeholder="Ex.: Cliente, OS, Equipamento" value="${escapeHtml(seed.label || "")}" />
+      <select class="header-field-type" aria-label="Tipo do campo">
+        ${renderSelectedOptions([
+          ["text", "Texto"],
+          ["date", "Data"],
+          ["number", "NÃºmero"],
+          ["textarea", "Texto longo"],
+        ], seed.type || "text")}
+      </select>
+      <label class="inline-check header-required"><input class="header-field-required" type="checkbox" ${seed.required ? "checked" : ""} /> ObrigatÃ³rio</label>
+      <button class="icon-button danger" data-action="remove-builder-row" type="button" title="Remover campo">Ã—</button>
+    </div>
+  `;
+  holder.appendChild(node);
+}
+
+function addHeaderFieldClean(seed = {}) {
+  const holder = document.getElementById("builder-header-fields");
+  if (!holder) return;
+  const node = document.createElement("div");
+  node.className = "builder-field header-builder-field";
+  node.innerHTML = `
+    <div class="field-head header-field-head">
+      <input class="header-field-label" type="text" placeholder="Ex.: Cliente, OS, Equipamento" value="${escapeHtml(seed.label || "")}" />
+      <select class="header-field-type" aria-label="Tipo do campo">
+        ${renderSelectedOptions([
+          ["text", "Texto"],
+          ["date", "Data"],
+          ["number", "Numero"],
+          ["textarea", "Texto longo"],
+        ], seed.type || "text")}
+      </select>
+      <label class="inline-check header-required"><input class="header-field-required" type="checkbox" ${seed.required ? "checked" : ""} /> Obrigatorio</label>
+      <button class="icon-button danger" data-action="remove-builder-row" type="button" title="Remover campo">x</button>
+    </div>
+  `;
+  holder.appendChild(node);
+}
+
 function openFillModal(templateId, taskId = "", submissionId = "") {
   const tpl = state.templates.find((item) => item.id === templateId);
   if (!tpl) return;
@@ -1056,6 +1110,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
         </div>
       </div>
       <form class="form" data-form="submission" data-template-id="${tpl.id}" data-task-id="${taskId}" data-submission-id="${submissionId}">
+        ${renderChecklistHeaderFields(tpl)}
         ${tpl.fields.map((field) => renderRuntimeField(field, tpl)).join("")}
         <button class="primary-button icon-text" type="submit">${editing ? iconUi("edit") : iconUi("check")} ${editing ? "Salvar edição" : "Finalizar checklist"}</button>
       </form>
@@ -1064,6 +1119,33 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
   document.body.appendChild(modal);
   setupSignaturePads();
   if (editing) hydrateSubmissionForm(editing);
+}
+
+function renderChecklistHeaderFields(tpl) {
+  const fields = tpl.headerFields || [];
+  if (!fields.length) return "";
+  return `
+    <section class="checklist-header-card">
+      <div>
+        <span class="template-kicker">Cabecalho</span>
+        <h3>Dados iniciais</h3>
+      </div>
+      <div class="checklist-header-grid">
+        ${fields.map((field) => renderChecklistHeaderInput(field)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderChecklistHeaderInput(field) {
+  const fieldId = `header_${field.id}`;
+  const required = field.required ? "required" : "";
+  const label = `${escapeHtml(field.label)}${field.required ? " *" : ""}`;
+  const type = field.type === "number" ? "number" : field.type === "date" ? "date" : "text";
+  if (field.type === "textarea") {
+    return `<div class="form-row header-runtime-field"><label>${label}</label><textarea name="${fieldId}" ${required}></textarea></div>`;
+  }
+  return `<div class="form-row header-runtime-field"><label>${label}</label><input name="${fieldId}" type="${type}" ${required} /></div>`;
 }
 
 function openFillPickerModal() {
@@ -1138,61 +1220,87 @@ async function exportSubmissionPdf(id) {
 async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
   const labels = statusLabels(submission);
-  const pages = [];
-  let currentLines = [];
-  const pushLine = (line = "") => {
-    wrapPdfLine(normalizePdfText(line), 88).forEach((wrapped) => {
-      if (currentLines.length >= 54) {
-        pages.push({ lines: currentLines, images: [] });
-        currentLines = [];
-      }
-      currentLines.push(wrapped);
-    });
-  };
-  [
-    "RELATORIO TECNICO DE CHECKLIST",
-    "",
-    `Checklist: ${submission.templateTitle}`,
-    `Categoria: ${submission.templateCategory || "Operacao"}`,
-    `Data: ${formatDate(submission.createdAt)}`,
-    `Preenchido por: ${userName(submission.filledBy)}`,
-    `Registro: ${submission.id}`,
-    "",
-    "RESUMO EXECUTIVO",
-    `Total de itens: ${stats.total} | ${labels.okLabel}: ${stats.ok} | ${labels.failLabel}: ${stats.fail} | Evidencias: ${stats.evidence}`,
-    "",
-    "ITENS VERIFICADOS",
-  ].forEach(pushLine);
+  const pages = buildChecklistPdfPages(submission, stats, labels);
   for (const [index, answer] of submission.answers.entries()) {
-    pushLine("");
-    pushLine(`${index + 1}. ${answer.title}`);
-    pushLine(`${pdfStatusLabel(submission, answer)}`);
-    if (answer.text) pushLine(`Observacao: ${answer.text}`);
-    if (answer.transcript) pushLine(`Transcricao do audio: ${answer.transcript}`);
-    if (answer.audio) pushLine("Audio: arquivo registrado no app");
-    if (answer.location) pushLine(`Localizacao: ${answer.location}`);
-    if (answer.ip) pushLine(`IP: ${answer.ip}`);
     const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
-    if (photos.length) pushLine(`Fotos: ${photos.length} imagem(ns) anexada(s) nas paginas de evidencias.`);
-    if (answer.selfieDoc) pushLine("Foto com documento: registrada nas evidencias.");
-    if (answer.signature) pushLine("Assinatura: registrada nas evidencias.");
     const entries = [
       ...photos.map((src, photoIndex) => ({ src, label: `Item ${index + 1} - Foto ${photoIndex + 1}: ${answer.title}` })),
       ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${index + 1} - Foto com documento: ${answer.title}` }] : []),
       ...(answer.signature ? [{ src: answer.signature, label: `Item ${index + 1} - Assinatura: ${answer.title}` }] : []),
     ];
-    if (entries.length && currentLines.length) {
-      pages.push({ lines: currentLines, images: [] });
-      currentLines = [];
-    }
     for (const entry of entries) {
       const image = await dataUrlToPdfJpeg(entry.src);
-      if (image) pages.push({ lines: [normalizePdfText(entry.label)], images: [image] });
+      if (image) pages.push({
+        type: "image",
+        title: submission.templateTitle,
+        accent: accentColor({ accent: submission.templateAccent }),
+        label: normalizePdfText(entry.label),
+        images: [image],
+      });
     }
   }
-  if (currentLines.length) pages.push({ lines: currentLines, images: [] });
 
   return buildPdfDocument(pages);
+}
+
+function buildChecklistPdfPages(submission, stats, labels) {
+  const accent = accentColor({ accent: submission.templateAccent });
+  const basePage = () => ({
+    type: "content",
+    title: submission.templateTitle,
+    category: submission.templateCategory || "Operacao",
+    filledBy: userName(submission.filledBy),
+    createdAt: formatDate(submission.createdAt),
+    register: submission.id,
+    accent,
+    stats,
+    labels,
+    headerValues: submission.headerValues || [],
+    items: [],
+    images: [],
+  });
+  const pages = [];
+  let page = basePage();
+  page.cover = true;
+  let used = 292 + Math.min(120, Math.max(0, (submission.headerValues || []).filter((item) => item.value).length) * 18);
+  const pageLimit = 730;
+  submission.answers.forEach((answer, index) => {
+    const item = buildPdfItem(submission, answer, index);
+    if (page.items.length && used + item.height > pageLimit) {
+      pages.push(page);
+      page = basePage();
+      used = 88;
+    }
+    page.items.push(item);
+    used += item.height + 10;
+  });
+  pages.push(page);
+  return pages;
+}
+
+function buildPdfItem(submission, answer, index) {
+  const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
+  const notes = [
+    answer.text ? ["Observacao", answer.text] : null,
+    answer.transcript ? ["Descricao do audio", answer.transcript] : null,
+    answer.audio ? ["Audio", "Arquivo de audio registrado no app."] : null,
+    answer.location ? ["Localizacao", answer.location] : null,
+    answer.ip ? ["IP", answer.ip] : null,
+    photos.length ? ["Fotos", `${photos.length} imagem(ns) anexada(s) logo apos este item.`] : null,
+    answer.selfieDoc ? ["Documento", "Foto com documento anexada logo apos este item."] : null,
+    answer.signature ? ["Assinatura", "Assinatura registrada logo apos este item."] : null,
+  ].filter(Boolean).flatMap(([label, value]) => {
+    const text = `${label}: ${value}`;
+    return wrapPdfLine(normalizePdfText(text), 78);
+  });
+  return {
+    number: index + 1,
+    titleLines: wrapPdfLine(normalizePdfText(answer.title), 44),
+    status: reportStatusValue(answer),
+    statusLabel: normalizePdfText(pdfStatusLabel(submission, answer)),
+    notes,
+    height: Math.max(72, 42 + wrapPdfLine(normalizePdfText(answer.title), 44).length * 14 + notes.length * 12),
+  };
 }
 
 function normalizePdfText(value) {
@@ -1282,12 +1390,12 @@ function buildPdfDocument(pages) {
   addObject("");
   addObject("");
   const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  pages.forEach((page) => {
-    const imageRefs = page.images.map((image) => {
+  pages.forEach((page, pageIndex) => {
+    const imageRefs = (page.images || []).map((image) => {
       const id = addObject(pdfStreamObject(image.bytes, `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>`));
       return { ...image, id };
     });
-    const content = pdfPageContent(page.lines, imageRefs);
+    const content = pdfPageContent(page, imageRefs, pageIndex + 1, pages.length);
     const contentId = addObject(pdfStreamObject(encoder.encode(content), `<< /Length ${encoder.encode(content).length} >>`));
     const xObjects = imageRefs.length
       ? `/XObject << ${imageRefs.map((image, index) => `/Im${index + 1} ${image.id} 0 R`).join(" ")} >>`
@@ -1329,26 +1437,169 @@ function pdfStreamObject(bytes, dictionary) {
   return merged;
 }
 
-function pdfPageContent(lines, images) {
+function pdfPageContent(page, images, pageNumber, totalPages) {
+  if (page.type === "image") return pdfImagePageContent(page, images, pageNumber, totalPages);
+  return pdfContentPageContent(page, pageNumber, totalPages);
+}
+
+function pdfContentPageContent(page, pageNumber, totalPages) {
+  const accent = pdfColor(page.accent);
+  const commands = [];
+  commands.push("1 1 1 rg 0 0 595 842 re f");
+  if (page.cover) {
+    commands.push(`${accent} rg 0 720 595 92 re f`);
+    commands.push("0.07 0.09 0.15 rg 0 698 595 22 re f");
+    commands.push(pdfText("RELATORIO TECNICO DE CHECKLIST", 42, 782, 9, "1 1 1"));
+    commands.push(pdfText(normalizePdfText(page.title), 42, 752, 22, "1 1 1"));
+    commands.push(pdfText(normalizePdfText(`${page.category} | Check list profissional Luma`), 42, 731, 10, "0.92 0.96 1"));
+    commands.push(pdfText("REGISTRO", 444, 777, 8, "0.92 0.96 1"));
+    commands.push(pdfText(shortId(page.register), 444, 756, 16, "1 1 1"));
+    commands.push(pdfInfoRow("Responsavel", page.filledBy, 42, 676));
+    commands.push(pdfInfoRow("Data e hora", page.createdAt, 214, 676));
+    commands.push(pdfInfoRow("ID completo", page.register, 386, 676, 22));
+    commands.push(...pdfSummaryCards(page.stats, page.labels, accent, 42, 602));
+    if (pdfVisibleHeaderValues(page).length) {
+      commands.push(pdfSectionTitle("Dados do cabecalho", 42, 548, accent));
+      commands.push(...pdfHeaderValueRows(page, 42, 516));
+      commands.push(pdfSectionTitle("Itens verificados", 42, 450, accent));
+    } else {
+      commands.push(pdfSectionTitle("Itens verificados", 42, 548, accent));
+    }
+  } else {
+    commands.push(`${accent} rg 0 804 595 38 re f`);
+    commands.push(pdfText(normalizePdfText(page.title), 42, 818, 12, "1 1 1"));
+    commands.push(pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"));
+  }
+  let y = page.cover ? (pdfVisibleHeaderValues(page).length ? 422 : 520) : 768;
+  page.items.forEach((item) => {
+    commands.push(...pdfItemCard(item, 42, y, 511, accent));
+    y -= item.height + 10;
+  });
+  commands.push(pdfFooter(pageNumber, totalPages));
+  return commands.join("\n");
+}
+
+function pdfImagePageContent(page, images, pageNumber, totalPages) {
+  const accent = pdfColor(page.accent);
   const commands = [
-    "BT",
-    "/F1 10 Tf",
-    "46 800 Td",
-    "13 TL",
-    ...lines.map((line) => `(${pdfEscape(line)}) Tj T*`),
-    "ET",
+    "1 1 1 rg 0 0 595 842 re f",
+    `${accent} rg 0 804 595 38 re f`,
+    pdfText(normalizePdfText(page.title), 42, 818, 12, "1 1 1"),
+    pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"),
+    pdfSectionTitle("Evidencia anexada", 42, 762, accent),
+    pdfText(normalizePdfText(page.label), 42, 736, 11, "0.12 0.16 0.24"),
+    "0.96 0.98 1 rg 42 94 511 610 re f",
+    "0.84 0.88 0.94 RG 42 94 511 610 re S",
   ];
   images.forEach((image, index) => {
-    const maxW = 500;
+    const maxW = 470;
     const maxH = 560;
     const scale = Math.min(maxW / image.width, maxH / image.height);
     const width = Math.round(image.width * scale);
     const height = Math.round(image.height * scale);
     const x = Math.round((595 - width) / 2);
-    const y = 92;
+    const y = Math.round(94 + (610 - height) / 2);
     commands.push("q", `${width} 0 0 ${height} ${x} ${y} cm`, `/Im${index + 1} Do`, "Q");
   });
+  commands.push(pdfFooter(pageNumber, totalPages));
   return commands.join("\n");
+}
+
+function pdfSummaryCards(stats, labels, accent, x, y) {
+  const cards = [
+    ["Total de itens", stats.total],
+    [labels.okLabel, stats.ok],
+    [labels.failLabel, stats.fail],
+    ["Evidencias", stats.evidence],
+  ];
+  return cards.flatMap(([label, value], index) => {
+    const cardX = x + index * 128;
+    return [
+      "0.96 0.98 1 rg " + `${cardX} ${y} 116 66 re f`,
+      "0.85 0.89 0.95 RG " + `${cardX} ${y} 116 66 re S`,
+      pdfText(normalizePdfText(label).toUpperCase(), cardX + 12, y + 43, 7.5, "0.35 0.42 0.54"),
+      pdfText(String(value), cardX + 12, y + 18, 24, index === 2 ? "0.8 0.12 0.12" : accent),
+    ];
+  });
+}
+
+function pdfVisibleHeaderValues(page) {
+  return (page.headerValues || []).filter((item) => item.value);
+}
+
+function pdfHeaderValueRows(page, x, y) {
+  return pdfVisibleHeaderValues(page).slice(0, 6).map((item, index) => {
+    const row = Math.floor(index / 2);
+    const col = index % 2;
+    const rowX = x + col * 256;
+    const rowY = y - row * 28;
+    const text = `${normalizePdfText(item.label)}: ${normalizePdfText(item.value)}`;
+    return [
+      "0.96 0.98 1 rg " + `${rowX} ${rowY - 18} 244 24 re f`,
+      "0.86 0.9 0.95 RG " + `${rowX} ${rowY - 18} 244 24 re S`,
+      pdfText(text.length > 58 ? `${text.slice(0, 55)}...` : text, rowX + 8, rowY - 10, 8.5, "0.16 0.2 0.3"),
+    ].join("\n");
+  });
+}
+
+function pdfItemCard(item, x, y, width, accent) {
+  const statusColor = item.status === "fail" ? "0.86 0.12 0.16" : item.status === "ok" ? "0.05 0.62 0.32" : accent;
+  const commands = [
+    "0.99 0.995 1 rg " + `${x} ${y - item.height} ${width} ${item.height} re f`,
+    "0.84 0.88 0.94 RG " + `${x} ${y - item.height} ${width} ${item.height} re S`,
+    `${accent} rg ${x} ${y - item.height} 4 ${item.height} re f`,
+    pdfText(`ITEM ${String(item.number).padStart(2, "0")}`, x + 16, y - 22, 8, "0.38 0.45 0.56"),
+    `${statusColor} rg ${x + width - 124} ${y - 34} 96 20 re f`,
+    pdfText(item.statusLabel, x + width - 116, y - 28, 8.5, "1 1 1"),
+  ];
+  let titleY = y - 40;
+  item.titleLines.forEach((line) => {
+    commands.push(pdfText(line, x + 16, titleY, 12, "0.08 0.11 0.18"));
+    titleY -= 14;
+  });
+  let noteY = titleY - 8;
+  item.notes.forEach((note) => {
+    commands.push(pdfText(note, x + 16, noteY, 8.5, "0.22 0.28 0.38"));
+    noteY -= 12;
+  });
+  if (!item.notes.length) commands.push(pdfText("Sem observacoes adicionais.", x + 16, noteY, 8.5, "0.43 0.49 0.58"));
+  return commands;
+}
+
+function pdfInfoRow(label, value, x, y, maxLength = 32) {
+  const normalized = normalizePdfText(value);
+  const shortValue = normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+  return [
+    "0.96 0.98 1 rg " + `${x} ${y - 36} 152 50 re f`,
+    "0.85 0.89 0.95 RG " + `${x} ${y - 36} 152 50 re S`,
+    pdfText(normalizePdfText(label).toUpperCase(), x + 10, y - 4, 7, "0.38 0.45 0.56"),
+    pdfText(shortValue, x + 10, y - 22, 9, "0.1 0.14 0.22"),
+  ].join("\n");
+}
+
+function pdfSectionTitle(title, x, y, accent) {
+  return [
+    `${accent} rg ${x} ${y - 3} 22 3 re f`,
+    pdfText(normalizePdfText(title).toUpperCase(), x, y - 20, 10, "0.14 0.18 0.28"),
+  ].join("\n");
+}
+
+function pdfFooter(pageNumber, totalPages) {
+  return [
+    "0.86 0.89 0.94 RG 42 54 m 553 54 l S",
+    pdfText("Check list profissional Luma", 42, 36, 8, "0.48 0.54 0.64"),
+    pdfText(`Pagina ${pageNumber} de ${totalPages}`, 498, 36, 8, "0.48 0.54 0.64"),
+  ].join("\n");
+}
+
+function pdfText(text, x, y, size, color = "0.08 0.11 0.18") {
+  return `BT ${color} rg /F1 ${size} Tf ${x} ${y} Td (${pdfEscape(normalizePdfText(text))}) Tj ET`;
+}
+
+function pdfColor(hex) {
+  const match = String(hex || "").match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!match) return "0.09 0.36 0.83";
+  return [match[1], match[2], match[3]].map((part) => (parseInt(part, 16) / 255).toFixed(3)).join(" ");
 }
 
 function base64ToBytes(base64) {
@@ -1428,6 +1679,9 @@ function renderRuntimeField(field, tpl = {}) {
 }
 
 function hydrateSubmissionForm(submission) {
+  (submission.headerValues || []).forEach((item) => {
+    setInputValue(`header_${item.fieldId}`, item.value || "");
+  });
   submission.answers.forEach((answer) => {
     const fieldId = answer.fieldId;
     if (answer.status || answer.checked !== undefined) {
@@ -1627,6 +1881,8 @@ function reportHtml(report) {
       <article><span>Evidências</span><strong>${stats.evidence}</strong></article>
     </section>
 
+    ${renderReportHeaderValues(report)}
+
     <section class="report-section">
       <div class="report-section-title">
         <span>01</span>
@@ -1664,6 +1920,22 @@ function reportHtml(report) {
         <h2>Assinatura e rastreabilidade</h2>
       </div>
       ${renderSignatureBlocks(report)}
+    </section>
+  `;
+}
+
+function renderReportHeaderValues(report) {
+  const values = (report.headerValues || []).filter((item) => item.value);
+  if (!values.length) return "";
+  return `
+    <section class="report-section">
+      <div class="report-section-title">
+        <span>00</span>
+        <h2>Dados do cabecalho</h2>
+      </div>
+      <div class="report-note-grid">
+        ${values.map((item) => `<p><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.value)}</span></p>`).join("")}
+      </div>
     </section>
   `;
 }
@@ -1861,7 +2133,14 @@ function submitVerify(data) {
 }
 
 function submitTemplate(form, data) {
+  const headerFields = [...form.querySelectorAll(".header-builder-field")].map((node) => ({
+    id: uid(),
+    label: node.querySelector(".header-field-label").value.trim(),
+    type: node.querySelector(".header-field-type").value,
+    required: node.querySelector(".header-field-required").checked,
+  })).filter((field) => field.label);
   const fields = [...form.querySelectorAll(".builder-field")].map((node) => {
+    if (node.classList.contains("header-builder-field")) return null;
     const options = {};
     node.querySelectorAll("[data-option]").forEach((input) => {
       options[input.dataset.option] = input.checked;
@@ -1872,7 +2151,7 @@ function submitTemplate(form, data) {
       kind: node.querySelector(".field-kind").value,
       options,
     };
-  }).filter((field) => field.title);
+  }).filter((field) => field?.title);
   if (!fields.length) return alert("Adicione pelo menos um campo.");
   const existingId = form.dataset.templateId || "";
   const existing = state.templates.find((tpl) => tpl.id === existingId);
@@ -1892,6 +2171,7 @@ function submitTemplate(form, data) {
     ownerId: existing?.ownerId || currentUser.id,
     companyId: existing?.companyId || currentUser.companyId,
     assignedAgentIds: data.getAll("agentIds"),
+    headerFields,
     fields,
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1950,6 +2230,12 @@ function submitUser(formType, data) {
 async function submitChecklist(form, data) {
   const tpl = state.templates.find((item) => item.id === form.dataset.templateId);
   if (!tpl) return;
+  const headerValues = (tpl.headerFields || []).map((field) => ({
+    fieldId: field.id,
+    label: field.label,
+    type: field.type || "text",
+    value: String(data.get(`header_${field.id}`) || "").trim(),
+  })).filter((item) => item.value || (tpl.headerFields || []).find((field) => field.id === item.fieldId)?.required);
   const answers = [];
   for (const field of tpl.fields) {
     answers.push({
@@ -1985,6 +2271,7 @@ async function submitChecklist(form, data) {
     taskId: form.dataset.taskId || "",
     companyId: tpl.companyId,
     filledBy: currentUser.id,
+    headerValues,
     answers,
     createdAt: existingId ? state.submissions.find((item) => item.id === existingId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -2045,6 +2332,8 @@ function handleGlobalClick(event) {
   if (action === "open-template-modal") openTemplateModal();
   if (action === "open-task-modal") openTaskModal();
   if (action === "add-builder-field") addBuilderField();
+  if (action === "add-header-field") addHeaderFieldClean();
+  if (action === "remove-builder-row") target.closest(".builder-field")?.remove();
   if (action === "close-modal") closeModal();
   if (action === "start-fill") {
     closeAllModals();
