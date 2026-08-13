@@ -1262,7 +1262,7 @@ function buildChecklistPdfPages(submission, stats, labels) {
   const pages = [];
   let page = basePage();
   page.cover = true;
-  let used = 292 + Math.min(120, Math.max(0, (submission.headerValues || []).filter((item) => item.value).length) * 18);
+  let used = pdfInitialCoverUsage(submission);
   const pageLimit = 730;
   submission.answers.forEach((answer, index) => {
     const item = buildPdfItem(submission, answer, index);
@@ -1276,6 +1276,12 @@ function buildChecklistPdfPages(submission, stats, labels) {
   });
   pages.push(page);
   return pages;
+}
+
+function pdfInitialCoverUsage(submission) {
+  const headerRows = Math.ceil(Math.min(6, (submission.headerValues || []).filter((item) => item.value).length) / 2);
+  const itemStartY = headerRows ? 448 - headerRows * 28 : 464;
+  return 730 - (itemStartY - 64);
 }
 
 function buildPdfItem(submission, answer, index) {
@@ -1457,20 +1463,21 @@ function pdfContentPageContent(page, pageNumber, totalPages) {
     commands.push(pdfInfoRow("Responsavel", page.filledBy, 42, 676));
     commands.push(pdfInfoRow("Data e hora", page.createdAt, 214, 676));
     commands.push(pdfInfoRow("ID completo", page.register, 386, 676, 22));
-    commands.push(...pdfSummaryCards(page.stats, page.labels, accent, 42, 602));
-    if (pdfVisibleHeaderValues(page).length) {
-      commands.push(pdfSectionTitle("Dados do cabecalho", 42, 548, accent));
-      commands.push(...pdfHeaderValueRows(page, 42, 516));
-      commands.push(pdfSectionTitle("Itens verificados", 42, 450, accent));
+    commands.push(...pdfSummaryCards(page.stats, page.labels, accent, 42, 558));
+    const headerRows = Math.ceil(Math.min(6, pdfVisibleHeaderValues(page).length) / 2);
+    if (headerRows) {
+      commands.push(pdfSectionTitle("Dados do cabecalho", 42, 498, accent));
+      commands.push(...pdfHeaderValueRows(page, 42, 466));
+      commands.push(pdfSectionTitle("Itens verificados", 42, 448 - headerRows * 28, accent));
     } else {
-      commands.push(pdfSectionTitle("Itens verificados", 42, 548, accent));
+      commands.push(pdfSectionTitle("Itens verificados", 42, 492, accent));
     }
   } else {
     commands.push(`${accent} rg 0 804 595 38 re f`);
     commands.push(pdfText(normalizePdfText(page.title), 42, 818, 12, "1 1 1"));
     commands.push(pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"));
   }
-  let y = page.cover ? (pdfVisibleHeaderValues(page).length ? 422 : 520) : 768;
+  let y = page.cover ? pdfCoverItemsStartY(page) : 768;
   page.items.forEach((item) => {
     commands.push(...pdfItemCard(item, 42, y, 511, accent));
     y -= item.height + 10;
@@ -1525,6 +1532,11 @@ function pdfSummaryCards(stats, labels, accent, x, y) {
 
 function pdfVisibleHeaderValues(page) {
   return (page.headerValues || []).filter((item) => item.value);
+}
+
+function pdfCoverItemsStartY(page) {
+  const headerRows = Math.ceil(Math.min(6, pdfVisibleHeaderValues(page).length) / 2);
+  return headerRows ? 420 - headerRows * 28 : 464;
 }
 
 function pdfHeaderValueRows(page, x, y) {
