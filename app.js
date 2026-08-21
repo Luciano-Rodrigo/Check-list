@@ -2557,34 +2557,23 @@ function deleteSubmission(id) {
 function deleteUser(id) {
   const user = state.users.find((item) => item.id === id);
   if (!canDeleteUser(user)) return;
-  const deletingCompany = currentUser.role === "adm" && user.role === "company";
-  const companyId = user.companyId;
-  const deletedUserIds = new Set(
-    deletingCompany
-      ? state.users.filter((item) => item.companyId === companyId && item.role !== "adm").map((item) => item.id)
-      : [user.id]
-  );
-  const message = deletingCompany
-    ? `Excluir a empresa ${user.name} e todos os acessos vinculados?`
-    : `Excluir o acesso de ${user.name}?`;
-  if (!confirm(message)) return;
+  if (!confirm(`Excluir somente o acesso de ${user.name}? Modelos, checklists e tarefas serão preservados.`)) return;
 
-  state.users = state.users.filter((item) => !deletedUserIds.has(item.id));
-  state.templates = state.templates
-    .filter((tpl) => !(deletingCompany && tpl.companyId === companyId))
-    .map((tpl) => ({
-      ...tpl,
-      ownerId: deletedUserIds.has(tpl.ownerId) ? "" : tpl.ownerId,
-      assignedAgentIds: (tpl.assignedAgentIds || []).filter((agentId) => !deletedUserIds.has(agentId)),
-    }));
-  state.submissions = state.submissions
-    .filter((item) => !(deletingCompany && item.companyId === companyId))
-    .map((item) => ({ ...item, filledBy: deletedUserIds.has(item.filledBy) ? "" : item.filledBy }));
-  state.tasks = state.tasks.filter((task) => (
-    !(deletingCompany && task.companyId === companyId)
-    && !deletedUserIds.has(task.ownerId)
-    && !deletedUserIds.has(task.assignedTo)
-  ));
+  state.users = state.users.filter((item) => item.id !== user.id);
+  state.templates = state.templates.map((tpl) => ({
+    ...tpl,
+    ownerId: tpl.ownerId === user.id ? "" : tpl.ownerId,
+    assignedAgentIds: (tpl.assignedAgentIds || []).filter((agentId) => agentId !== user.id),
+  }));
+  state.submissions = state.submissions.map((item) => ({
+    ...item,
+    filledBy: item.filledBy === user.id ? "" : item.filledBy,
+  }));
+  state.tasks = state.tasks.map((task) => ({
+    ...task,
+    ownerId: task.ownerId === user.id ? "" : task.ownerId,
+    assignedTo: task.assignedTo === user.id ? "" : task.assignedTo,
+  }));
 
   saveState();
   render();

@@ -274,7 +274,7 @@ async function writeStateToTables(state) {
     const submissions = Array.isArray(state.submissions) ? state.submissions : [];
     const tasks = Array.isArray(state.tasks) ? state.tasks : [];
 
-    await ensureWorkspaces(client, users);
+    await ensureWorkspaces(client, users, templates, submissions, tasks);
     await upsertUsers(client, users);
     await deleteMissingUsers(client, users);
     await replaceModels(client, templates);
@@ -291,7 +291,7 @@ async function writeStateToTables(state) {
   }
 }
 
-async function ensureWorkspaces(client, users) {
+async function ensureWorkspaces(client, users, templates = [], submissions = [], tasks = []) {
   const workspaceMap = new Map();
   users.forEach((user) => {
     const workspaceId = user.companyId || user.id;
@@ -307,6 +307,17 @@ async function ensureWorkspaces(client, users) {
       createdAt: user.createdAt || new Date().toISOString()
     });
   });
+  [...templates, ...submissions, ...tasks].forEach((item) => {
+    const workspaceId = item.companyId || "luma";
+    if (workspaceMap.has(workspaceId)) return;
+    workspaceMap.set(workspaceId, {
+      id: workspaceId,
+      ownerUserId: null,
+      kind: workspaceId === "luma" ? "admin" : "company",
+      name: workspaceId === "luma" ? "Administração Luma" : workspaceId,
+      createdAt: item.createdAt || new Date().toISOString()
+    });
+  });
 
   for (const workspace of workspaceMap.values()) {
     await client.query(
@@ -315,8 +326,8 @@ async function ensureWorkspaces(client, users) {
         values ($1, $2, $3, $4, $5)
         on conflict (id)
         do update set owner_user_id = coalesce(excluded.owner_user_id, access_workspaces.owner_user_id),
-                      kind = excluded.kind,
-                      name = excluded.name
+                      kind = case when excluded.owner_user_id is null then access_workspaces.kind else excluded.kind end,
+                      name = case when excluded.owner_user_id is null then access_workspaces.name else excluded.name end
       `,
       [workspace.id, workspace.ownerUserId, workspace.kind, workspace.name, workspace.createdAt]
     );
