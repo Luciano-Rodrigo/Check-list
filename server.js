@@ -276,9 +276,11 @@ async function writeStateToTables(state) {
 
     await ensureWorkspaces(client, users);
     await upsertUsers(client, users);
+    await deleteMissingUsers(client, users);
     await replaceModels(client, templates);
     await replaceSubmissions(client, submissions);
     await replaceTasks(client, tasks);
+    await deleteMissingWorkspaces(client, users, templates, submissions, tasks);
 
     await client.query("commit");
   } catch (error) {
@@ -351,6 +353,20 @@ async function upsertUsers(client, users) {
       ]
     );
   }
+}
+
+async function deleteMissingUsers(client, users) {
+  const userIds = users.map((user) => user.id).filter(Boolean);
+  await client.query("delete from app_users where not (id = any($1::text[]))", [userIds]);
+}
+
+async function deleteMissingWorkspaces(client, users, templates, submissions, tasks) {
+  const workspaceIds = new Set();
+  users.forEach((user) => workspaceIds.add(user.companyId || user.id));
+  templates.forEach((tpl) => workspaceIds.add(tpl.companyId || "luma"));
+  submissions.forEach((item) => workspaceIds.add(item.companyId || "luma"));
+  tasks.forEach((task) => workspaceIds.add(task.companyId || "luma"));
+  await client.query("delete from access_workspaces where not (id = any($1::text[]))", [[...workspaceIds].filter(Boolean)]);
 }
 
 async function replaceModels(client, templates) {

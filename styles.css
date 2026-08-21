@@ -1026,6 +1026,8 @@ textarea {
   border: 1px dashed var(--line);
   border-radius: 8px;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .photo-preview {
@@ -2197,6 +2199,38 @@ textarea {
   .checklist-modal {
     border-radius: 0;
     max-height: 100vh;
+  }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  .signature-backdrop {
+    place-items: stretch;
+  }
+
+  .signature-modal {
+    width: 100vw;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: 10px;
+  }
+
+  .signature-modal-head h2 {
+    font-size: 15px;
+  }
+
+  .signature-board {
+    min-height: 0;
+  }
+
+  .signature-pad-large {
+    min-height: 0;
+  }
+
+  .signature-floating-actions {
+    right: 10px;
+    bottom: 10px;
   }
 }
 

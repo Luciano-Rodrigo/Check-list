@@ -399,7 +399,6 @@ function renderLoginForm() {
         <input name="password" type="password" autocomplete="current-password" required />
       </div>
       <button class="primary-button" type="submit">Entrar</button>
-      <p class="small">Demo ADM: admin@luma.com / admin123</p>
     </form>
   `;
 }
@@ -764,6 +763,7 @@ function renderUsers() {
 }
 
 function renderUserItem(user) {
+  const canDelete = canDeleteUser(user);
   return `
     <article class="list-item">
       <div class="list-item-head">
@@ -771,10 +771,19 @@ function renderUserItem(user) {
           <h3>${escapeHtml(user.name)}</h3>
           <span class="small">${escapeHtml(user.email)} · ${roleLabel(user.role)}</span>
         </div>
-        <span class="badge">${user.verified ? "Verificado" : "Pendente"}</span>
+        <div class="toolbar">
+          <span class="badge">${user.verified ? "Verificado" : "Pendente"}</span>
+          ${canDelete ? `<button class="danger-button icon-text" data-action="delete-user" data-id="${user.id}" type="button">${iconUi("trash")} Excluir</button>` : ""}
+        </div>
       </div>
     </article>
   `;
+}
+
+function canDeleteUser(user) {
+  if (!currentUser || !user || user.id === currentUser.id || user.role === "adm") return false;
+  if (currentUser.role === "adm") return true;
+  return currentUser.role === "company" && user.role === "agent" && user.companyId === currentUser.companyId;
 }
 
 function renderTaskForm() {
@@ -1201,13 +1210,10 @@ async function shareSubmissionWhatsapp(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
   const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
-  const file = new File([await buildSubmissionPdfBlob(submission)], `${safeFileName(submission.templateTitle)}.pdf`, { type: "application/pdf" });
-  if (navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ files: [file], title: submission.templateTitle, text });
-    return;
-  }
-  downloadBlob(file, file.name);
-  window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF baixado: anexe o arquivo ${file.name} nesta conversa.`)}`, "_blank", "noopener");
+  const fileName = `${safeFileName(submission.templateTitle)}.pdf`;
+  const blob = await buildSubmissionPdfBlob(submission);
+  downloadBlob(blob, fileName);
+  window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF completo baixado: anexe o arquivo ${fileName} nesta conversa.`)}`, "_blank", "noopener");
 }
 
 async function exportSubmissionPdf(id) {
@@ -1634,6 +1640,7 @@ function downloadBlob(blob, fileName) {
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
+  link.rel = "noopener";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -2399,6 +2406,7 @@ function handleGlobalClick(event) {
     render();
   }
   if (action === "delete-task") deleteTask(target.dataset.id);
+  if (action === "delete-user") deleteUser(target.dataset.id);
   if (action === "edit-template") openTemplateModal(target.dataset.id);
   if (action === "delete-template") deleteTemplate(target.dataset.id);
   if (action === "duplicate-template") duplicateTemplate(target.dataset.id);
@@ -2546,6 +2554,42 @@ function deleteSubmission(id) {
   render();
 }
 
+function deleteUser(id) {
+  const user = state.users.find((item) => item.id === id);
+  if (!canDeleteUser(user)) return;
+  const deletingCompany = currentUser.role === "adm" && user.role === "company";
+  const companyId = user.companyId;
+  const deletedUserIds = new Set(
+    deletingCompany
+      ? state.users.filter((item) => item.companyId === companyId && item.role !== "adm").map((item) => item.id)
+      : [user.id]
+  );
+  const message = deletingCompany
+    ? `Excluir a empresa ${user.name} e todos os acessos vinculados?`
+    : `Excluir o acesso de ${user.name}?`;
+  if (!confirm(message)) return;
+
+  state.users = state.users.filter((item) => !deletedUserIds.has(item.id));
+  state.templates = state.templates
+    .filter((tpl) => !(deletingCompany && tpl.companyId === companyId))
+    .map((tpl) => ({
+      ...tpl,
+      ownerId: deletedUserIds.has(tpl.ownerId) ? "" : tpl.ownerId,
+      assignedAgentIds: (tpl.assignedAgentIds || []).filter((agentId) => !deletedUserIds.has(agentId)),
+    }));
+  state.submissions = state.submissions
+    .filter((item) => !(deletingCompany && item.companyId === companyId))
+    .map((item) => ({ ...item, filledBy: deletedUserIds.has(item.filledBy) ? "" : item.filledBy }));
+  state.tasks = state.tasks.filter((task) => (
+    !(deletingCompany && task.companyId === companyId)
+    && !deletedUserIds.has(task.ownerId)
+    && !deletedUserIds.has(task.assignedTo)
+  ));
+
+  saveState();
+  render();
+}
+
 function duplicateTemplate(id) {
   const tpl = state.templates.find((item) => item.id === id);
   if (!tpl) return;
@@ -2683,28 +2727,34 @@ function setupSignaturePad(canvas) {
   if (!canvas || canvas.dataset.ready === "true") return;
   canvas.dataset.ready = "true";
   const ctx = canvas.getContext("2d");
-  const resize = () => {
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * devicePixelRatio;
-    canvas.height = rect.height * devicePixelRatio;
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  const input = canvas.nextElementSibling;
+  const applyStrokeStyle = () => {
     ctx.lineWidth = 3;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = document.documentElement.dataset.theme === "dark" ? "#f3f6f8" : "#17202a";
   };
+  const resize = () => {
+    const existing = input?.value || (canvas.width && canvas.height ? canvas.toDataURL("image/png") : "");
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * devicePixelRatio;
+    canvas.height = rect.height * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    applyStrokeStyle();
+    if (existing) drawSignatureOnCanvas(canvas, existing);
+  };
   resize();
   let drawing = false;
   const point = (event) => {
     const rect = canvas.getBoundingClientRect();
-    const touch = event.touches?.[0];
     return {
-      x: (touch?.clientX ?? event.clientX) - rect.left,
-      y: (touch?.clientY ?? event.clientY) - rect.top,
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     };
   };
   const start = (event) => {
     drawing = true;
+    canvas.setPointerCapture?.(event.pointerId);
     const p = point(event);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
@@ -2715,20 +2765,22 @@ function setupSignaturePad(canvas) {
     const p = point(event);
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
-    canvas.nextElementSibling.value = canvas.toDataURL("image/png");
+    if (input) input.value = canvas.toDataURL("image/png");
     event.preventDefault();
   };
-  const end = () => {
+  const end = (event) => {
     if (!drawing) return;
     drawing = false;
-    canvas.nextElementSibling.value = canvas.toDataURL("image/png");
+    canvas.releasePointerCapture?.(event.pointerId);
+    if (input) input.value = canvas.toDataURL("image/png");
   };
-  canvas.addEventListener("mousedown", start);
-  canvas.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", end);
-  canvas.addEventListener("touchstart", start, { passive: false });
-  canvas.addEventListener("touchmove", move, { passive: false });
-  canvas.addEventListener("touchend", end);
+  const redraw = () => requestAnimationFrame(resize);
+  canvas.addEventListener("pointerdown", start);
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  window.addEventListener("resize", redraw);
+  window.addEventListener("orientationchange", redraw);
 }
 
 function previewFile(input) {
