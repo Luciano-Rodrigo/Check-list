@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { mkdir } from "node:fs/promises";
 
-const source = "assets/luma-logo.svg";
+const source = "assets/luma-logo.png";
 const targets = [
   ["assets/icon-192.png", 192],
   ["assets/icon-512.png", 512],

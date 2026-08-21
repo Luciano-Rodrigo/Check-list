@@ -86,11 +86,6 @@ button {
   color: rgba(255, 255, 255, 0.68);
 }
 
-.sidebar .brand-mark {
-  background: #f7fafc;
-  color: #1e2630;
-}
-
 .hamburger {
   width: 42px;
   height: 42px;
@@ -127,11 +122,9 @@ button {
   width: 42px;
   height: 42px;
   border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--text);
-  color: var(--surface);
-  font-weight: 800;
+  display: block;
+  object-fit: cover;
+  background: #020b20;
 }
 
 .brand h1,
@@ -1099,6 +1092,15 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.76);
+}
+
+.report-logo {
+  width: 54px;
+  height: 54px;
+  display: block;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  object-fit: cover;
 }
 
 .report-cover h1 {

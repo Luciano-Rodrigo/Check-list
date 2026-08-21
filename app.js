@@ -183,13 +183,24 @@ function migrateState(nextState) {
 }
 
 function saveMigratedState(nextState) {
-  localStorage.setItem(STORE_KEY, JSON.stringify(nextState));
+  saveLocalState(nextState);
   saveRemoteState(nextState);
 }
 
 function saveState() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  const savedLocally = saveLocalState(state);
   saveRemoteState(state);
+  return savedLocally;
+}
+
+function saveLocalState(nextState) {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(nextState));
+    return true;
+  } catch (error) {
+    console.warn("Não foi possível salvar todo o estado no armazenamento local.", error);
+    return false;
+  }
 }
 
 async function loadRemoteState() {
@@ -311,14 +322,14 @@ function render() {
           <span></span><span></span><span></span>
         </button>
         <div class="mobile-title">
-          <div class="brand-mark">L</div>
+          ${brandMark()}
           <strong>Checklist Luma</strong>
         </div>
         <button class="icon-button" data-action="toggle-theme" type="button" title="Alternar tema">${iconUi("theme")}</button>
       </header>
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">L</div>
+          ${brandMark()}
           <div>
             <h1>Check list profissional</h1>
             <p>Luma</p>
@@ -346,6 +357,10 @@ function navButton(page, label, icon) {
   return `<button class="${currentPage === page ? "active" : ""}" data-page="${page}" type="button"><span class="nav-icon">${iconUi(icon)}</span><span>${label}</span></button>`;
 }
 
+function brandMark() {
+  return `<img class="brand-mark" src="assets/luma-logo.png" alt="Luma" />`;
+}
+
 function roleLabel(role) {
   return { adm: "ADM", company: "Empresa", agent: "Agente", personal: "Pessoal" }[role] || role;
 }
@@ -367,7 +382,7 @@ function renderAuth() {
     <main class="auth-page">
       <section class="auth-panel">
         <div class="brand">
-          <div class="brand-mark">L</div>
+          ${brandMark()}
           <div>
             <h1>Check list profissional</h1>
             <p>Produto Luma</p>
@@ -1244,6 +1259,10 @@ async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
   const labels = statusLabels(submission);
   const pages = buildChecklistPdfPages(submission, stats, labels);
+  const logo = await dataUrlToPdfJpeg("assets/luma-logo.png");
+  if (logo) pages.forEach((page) => {
+    page.logo = logo;
+  });
   for (const [index, answer] of submission.answers.entries()) {
     const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
     const entries = [
@@ -1258,6 +1277,7 @@ async function buildSubmissionPdfBlob(submission) {
         title: submission.templateTitle,
         accent: accentColor({ accent: submission.templateAccent }),
         label: normalizePdfText(entry.label),
+        logo,
         images: [image],
       });
     }
@@ -1424,10 +1444,15 @@ function buildPdfDocument(pages) {
       const id = addObject(pdfStreamObject(image.bytes, `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>`));
       return { ...image, id };
     });
-    const content = pdfPageContent(page, imageRefs, pageIndex + 1, pages.length);
+    const logoRef = page.logo ? { ...page.logo, id: addObject(pdfStreamObject(page.logo.bytes, `<< /Type /XObject /Subtype /Image /Width ${page.logo.width} /Height ${page.logo.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.logo.bytes.length} >>`)) } : null;
+    const content = pdfPageContent(page, imageRefs, logoRef, pageIndex + 1, pages.length);
     const contentId = addObject(pdfStreamObject(encoder.encode(content), `<< /Length ${encoder.encode(content).length} >>`));
-    const xObjects = imageRefs.length
-      ? `/XObject << ${imageRefs.map((image, index) => `/Im${index + 1} ${image.id} 0 R`).join(" ")} >>`
+    const xObjectRefs = [
+      ...imageRefs.map((image, index) => `/Im${index + 1} ${image.id} 0 R`),
+      ...(logoRef ? [`/Logo ${logoRef.id} 0 R`] : []),
+    ];
+    const xObjects = xObjectRefs.length
+      ? `/XObject << ${xObjectRefs.join(" ")} >>`
       : "";
     const pageId = addObject(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> ${xObjects} >> /Contents ${contentId} 0 R >>`);
     pageIds.push(pageId);
@@ -1466,21 +1491,22 @@ function pdfStreamObject(bytes, dictionary) {
   return merged;
 }
 
-function pdfPageContent(page, images, pageNumber, totalPages) {
-  if (page.type === "image") return pdfImagePageContent(page, images, pageNumber, totalPages);
-  return pdfContentPageContent(page, pageNumber, totalPages);
+function pdfPageContent(page, images, logo, pageNumber, totalPages) {
+  if (page.type === "image") return pdfImagePageContent(page, images, logo, pageNumber, totalPages);
+  return pdfContentPageContent(page, logo, pageNumber, totalPages);
 }
 
-function pdfContentPageContent(page, pageNumber, totalPages) {
+function pdfContentPageContent(page, logo, pageNumber, totalPages) {
   const accent = pdfColor(page.accent);
   const commands = [];
   commands.push("1 1 1 rg 0 0 595 842 re f");
   if (page.cover) {
     commands.push(`${accent} rg 0 720 595 92 re f`);
     commands.push("0.07 0.09 0.15 rg 0 698 595 22 re f");
-    commands.push(pdfText("RELATORIO TECNICO DE CHECKLIST", 42, 782, 9, "1 1 1"));
-    commands.push(pdfText(normalizePdfText(page.title), 42, 752, 22, "1 1 1"));
-    commands.push(pdfText(normalizePdfText(`${page.category} | Check list profissional Luma`), 42, 731, 10, "0.92 0.96 1"));
+    if (logo) commands.push(pdfImageCommand("Logo", 42, 744, 48, 48));
+    commands.push(pdfText("RELATORIO TECNICO DE CHECKLIST", logo ? 102 : 42, 782, 9, "1 1 1"));
+    commands.push(pdfText(normalizePdfText(page.title), logo ? 102 : 42, 752, 22, "1 1 1"));
+    commands.push(pdfText(normalizePdfText(`${page.category} | Check list profissional Luma`), logo ? 102 : 42, 731, 10, "0.92 0.96 1"));
     commands.push(pdfText("REGISTRO", 444, 777, 8, "0.92 0.96 1"));
     commands.push(pdfText(shortId(page.register), 444, 756, 16, "1 1 1"));
     commands.push(pdfInfoRow("Responsavel", page.filledBy, 42, 676));
@@ -1497,7 +1523,8 @@ function pdfContentPageContent(page, pageNumber, totalPages) {
     }
   } else {
     commands.push(`${accent} rg 0 804 595 38 re f`);
-    commands.push(pdfText(normalizePdfText(page.title), 42, 818, 12, "1 1 1"));
+    if (logo) commands.push(pdfImageCommand("Logo", 42, 810, 24, 24));
+    commands.push(pdfText(normalizePdfText(page.title), logo ? 74 : 42, 818, 12, "1 1 1"));
     commands.push(pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"));
   }
   let y = page.cover ? pdfCoverItemsStartY(page) : 768;
@@ -1505,16 +1532,17 @@ function pdfContentPageContent(page, pageNumber, totalPages) {
     commands.push(...pdfItemCard(item, 42, y, 511, accent));
     y -= item.height + 10;
   });
-  commands.push(pdfFooter(pageNumber, totalPages));
+  commands.push(pdfFooter(pageNumber, totalPages, logo));
   return commands.join("\n");
 }
 
-function pdfImagePageContent(page, images, pageNumber, totalPages) {
+function pdfImagePageContent(page, images, logo, pageNumber, totalPages) {
   const accent = pdfColor(page.accent);
   const commands = [
     "1 1 1 rg 0 0 595 842 re f",
     `${accent} rg 0 804 595 38 re f`,
-    pdfText(normalizePdfText(page.title), 42, 818, 12, "1 1 1"),
+    ...(logo ? [pdfImageCommand("Logo", 42, 810, 24, 24)] : []),
+    pdfText(normalizePdfText(page.title), logo ? 74 : 42, 818, 12, "1 1 1"),
     pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"),
     pdfSectionTitle("Evidencia anexada", 42, 762, accent),
     pdfText(normalizePdfText(page.label), 42, 736, 11, "0.12 0.16 0.24"),
@@ -1531,7 +1559,7 @@ function pdfImagePageContent(page, images, pageNumber, totalPages) {
     const y = Math.round(94 + (610 - height) / 2);
     commands.push("q", `${width} 0 0 ${height} ${x} ${y} cm`, `/Im${index + 1} Do`, "Q");
   });
-  commands.push(pdfFooter(pageNumber, totalPages));
+  commands.push(pdfFooter(pageNumber, totalPages, logo));
   return commands.join("\n");
 }
 
@@ -1619,12 +1647,17 @@ function pdfSectionTitle(title, x, y, accent) {
   ].join("\n");
 }
 
-function pdfFooter(pageNumber, totalPages) {
+function pdfFooter(pageNumber, totalPages, logo) {
   return [
     "0.86 0.89 0.94 RG 42 54 m 553 54 l S",
-    pdfText("Check list profissional Luma", 42, 36, 8, "0.48 0.54 0.64"),
+    ...(logo ? [pdfImageCommand("Logo", 42, 27, 18, 18)] : []),
+    pdfText("Check list profissional Luma", logo ? 66 : 42, 36, 8, "0.48 0.54 0.64"),
     pdfText(`Pagina ${pageNumber} de ${totalPages}`, 498, 36, 8, "0.48 0.54 0.64"),
   ].join("\n");
+}
+
+function pdfImageCommand(name, x, y, width, height) {
+  return ["q", `${width} 0 0 ${height} ${x} ${y} cm`, `/${name} Do`, "Q"].join("\n");
 }
 
 function pdfText(text, x, y, size, color = "0.08 0.11 0.18") {
@@ -1906,6 +1939,7 @@ function reportHtml(report) {
   return `
     <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })}" style="--accent-color:${reportAccent}; background:linear-gradient(135deg, ${reportAccent}, #111827);">
       <div>
+        <img class="report-logo" src="assets/luma-logo.png" alt="Luma" />
         <span class="report-label">Relatório técnico de checklist</span>
         <h1>${escapeHtml(report.templateTitle)}</h1>
         <p>${escapeHtml(report.templateCategory || "Operação")} · Check list profissional Luma</p>
@@ -2309,9 +2343,9 @@ async function submitChecklist(form, data) {
       transcript: String(data.get(`${field.id}_transcript`) || ""),
       location: String(data.get(`${field.id}_location`) || ""),
       ip: String(data.get(`${field.id}_ip`) || ""),
-      photos: safeJson(String(data.get(`${field.id}_photos`) || "[]"), []),
+      photos: await normalizeImageDataUrls(safeJson(String(data.get(`${field.id}_photos`) || "[]"), [])),
       photo: await fileToDataUrl(data.get(`${field.id}_photo`)),
-      selfieDoc: (await fileToDataUrl(data.get(`${field.id}_selfieDoc`))) || String(data.get(`${field.id}_selfieDoc_existing`) || ""),
+      selfieDoc: (await fileToDataUrl(data.get(`${field.id}_selfieDoc`), { maxSize: 1400, quality: 0.72 })) || String(data.get(`${field.id}_selfieDoc_existing`) || ""),
       audio: String(data.get(`${field.id}_audio`) || ""),
       signature: String(data.get(`${field.id}_signature`) || ""),
     });
@@ -2349,10 +2383,11 @@ async function submitChecklist(form, data) {
       task.completedLocation = firstLocationFromAnswers(answers);
     }
   }
-  saveState();
+  const savedLocally = saveState();
   closeAllModals();
   render();
   openChecklistSuccessModal(payload.id);
+  if (!savedLocally) alert("O checklist foi finalizado, mas o armazenamento local do navegador está cheio. As fotos foram reduzidas; se estiver usando sem banco de dados, libere espaço antes de criar muitos laudos.");
 }
 
 function firstLocationFromAnswers(answers) {
@@ -2875,12 +2910,52 @@ function previewFile(input) {
   reader.readAsDataURL(file);
 }
 
-function fileToDataUrl(file) {
+function fileToDataUrl(file, options = {}) {
   if (!file || !file.size) return Promise.resolve("");
+  if (file.type.startsWith("image/")) return compressImageSource(URL.createObjectURL(file), options, true);
+  return readFileAsDataUrl(file);
+}
+
+function readFileAsDataUrl(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.readAsDataURL(file);
+  });
+}
+
+async function normalizeImageDataUrls(images) {
+  const compressed = await Promise.all(
+    images
+      .filter(Boolean)
+      .map((src) => compressImageSource(src, { maxSize: 1600, quality: 0.76 }))
+  );
+  return compressed.filter(Boolean);
+}
+
+function compressImageSource(src, options = {}, revoke = false) {
+  const { maxSize = 1600, quality = 0.76 } = options;
+  return new Promise((resolve) => {
+    if (!src) return resolve("");
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      if (revoke) URL.revokeObjectURL(src);
+      resolve(dataUrl);
+    };
+    image.onerror = () => {
+      if (revoke) URL.revokeObjectURL(src);
+      resolve(revoke ? "" : src);
+    };
+    image.src = src;
   });
 }
 

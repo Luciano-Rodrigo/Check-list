@@ -1,11 +1,11 @@
-const CACHE_NAME = "luma-checklist-profissional-v8";
+const CACHE_NAME = "luma-checklist-profissional-v9";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./manifest.webmanifest",
-  "./assets/luma-logo.svg",
+  "./assets/luma-logo.png",
   "./assets/icon-192.png",
   "./assets/icon-512.png",
   "./assets/apple-touch-icon.png",
