@@ -1612,6 +1612,19 @@ textarea {
   stroke-width: 0;
 }
 
+.tool-icon .camera-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.camera-tool {
+  color: #0f766e;
+  background: color-mix(in srgb, #0f766e 9%, transparent);
+}
+
 .signature-inline {
   grid-column: 1 / -1;
   display: flex;
@@ -1706,6 +1719,17 @@ textarea {
   border-color: var(--ok);
 }
 
+.photo-source-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.photo-source-actions .icon-text {
+  justify-content: center;
+  min-height: 52px;
+}
+
 .tool-icon svg path,
 .tool-icon svg rect,
 .tool-icon svg circle {
@@ -1741,7 +1765,16 @@ textarea {
   object-fit: cover;
 }
 
-.thumb button {
+.thumb-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.thumb > button:not(.thumb-preview) {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -1753,6 +1786,21 @@ textarea {
   background: rgba(15, 23, 42, 0.78);
   color: #fff;
   font-weight: 850;
+}
+
+.photo-preview-modal {
+  width: min(920px, calc(100vw - 28px));
+  max-height: min(92vh, 820px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.photo-preview-modal img {
+  width: 100%;
+  max-height: 74vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--surface-soft);
 }
 
 .evidence-note {
@@ -2169,6 +2217,14 @@ textarea {
     bottom: 14px;
   }
 
+  .photo-source-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .photo-preview-modal img {
+    max-height: 72vh;
+  }
+
   .success-actions {
     grid-template-columns: 1fr;
   }
@@ -2224,6 +2280,43 @@ textarea {
     min-height: 0;
   }
 
+  .signature-pad-large {
+    min-height: 0;
+  }
+
+  .signature-floating-actions {
+    right: 10px;
+    bottom: 10px;
+  }
+}
+
+@media (max-width: 900px) and (orientation: portrait) {
+  .signature-landscape-open body {
+    overflow: hidden;
+  }
+
+  .signature-backdrop {
+    place-items: center;
+    overflow: hidden;
+  }
+
+  .signature-modal {
+    width: 100dvh;
+    height: 100dvw;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: 10px;
+    transform: rotate(90deg);
+    transform-origin: center center;
+  }
+
+  .signature-modal-head h2 {
+    font-size: 15px;
+  }
+
+  .signature-board,
   .signature-pad-large {
     min-height: 0;
   }

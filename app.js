@@ -612,7 +612,13 @@ function statusChoiceIcon(name) {
 }
 
 function iconCamera() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h2l1.2-1.6A1 1 0 0 1 10.5 4h3a1 1 0 0 1 .8.4L15.5 6h2A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-8Z"/><circle cx="12" cy="12.5" r="3.2"/></svg>`;
+  return `
+    <svg class="camera-glyph" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 8.5A2.5 2.5 0 0 1 7.5 6h1.8l1.1-1.5h3.2L14.7 6h1.8A2.5 2.5 0 0 1 19 8.5v7A2.5 2.5 0 0 1 16.5 18h-9A2.5 2.5 0 0 1 5 15.5v-7Z"/>
+      <circle cx="12" cy="12.2" r="3.1"/>
+      <path d="M18 5v3M16.5 6.5h3"/>
+    </svg>
+  `;
 }
 
 function iconChat() {
@@ -640,6 +646,7 @@ function iconUi(name) {
     trash: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v8H9v-8Zm4 0h2v8h-2v-8ZM6 9h12l-1 12H7L6 9Z"/></svg>`,
     pdf: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l4 4v16H6V2Zm8 1v4h4M8 15h8v2H8v-2Zm0-4h8v2H8v-2Z"/></svg>`,
     eye: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5 0 8 4.5 9 7-1 2.5-4 7-9 7s-8-4.5-9-7c1-2.5 4-7 9-7Zm0 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>`,
+    gallery: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4V5Zm2 2v8.6l3.7-3.7 2.8 2.8 2.1-2.1L18 16V7H6Zm9 1.5a1.7 1.7 0 1 1 0 3.4 1.7 1.7 0 0 1 0-3.4Z"/></svg>`,
   };
   return icons[name] || "";
 }
@@ -1209,10 +1216,20 @@ function openChecklistSuccessModal(submissionId) {
 async function shareSubmissionWhatsapp(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
-  const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
   const fileName = `${safeFileName(submission.templateTitle)}.pdf`;
   const blob = await buildSubmissionPdfBlob(submission);
+  const file = new File([blob], fileName, { type: "application/pdf", lastModified: Date.now() });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: fileName });
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+  }
   downloadBlob(blob, fileName);
+  const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
+  alert("Este navegador não permite anexar o PDF automaticamente. O arquivo completo foi baixado; anexe ele na conversa do WhatsApp.");
   window.open(`https://wa.me/?text=${encodeURIComponent(`${text} PDF completo baixado: anexe o arquivo ${fileName} nesta conversa.`)}`, "_blank", "noopener");
 }
 
@@ -1675,7 +1692,7 @@ function renderRuntimeField(field, tpl = {}) {
         </div>
         <h3>${escapeHtml(field.title)}</h3>
         <div class="inspection-actions">
-          ${options.photo ? `<button class="tool-icon" data-action="open-photo-picker" data-field="${field.id}" type="button" title="Tirar foto ou escolher imagens">${iconCamera()}</button>` : ""}
+          ${options.photo ? `<button class="tool-icon camera-tool" data-action="open-photo-picker" data-field="${field.id}" type="button" title="Tirar foto ou escolher imagens">${iconCamera()}</button>` : ""}
           ${options.text ? `<button class="tool-icon" data-action="open-observation-modal" data-field="${field.id}" type="button" title="Observações">${iconChat()}</button>` : ""}
           ${options.audio ? `<button class="tool-icon" data-action="start-audio" data-field="${field.id}" type="button" title="Gravar áudio">${iconMic()}</button>` : ""}
         </div>
@@ -1688,7 +1705,7 @@ function renderRuntimeField(field, tpl = {}) {
         ` : ""}
       </div>
       ${options.text ? `<input type="hidden" name="${field.id}_text" /><div class="evidence-note hidden" data-note-preview="${field.id}"></div>` : ""}
-      ${options.photo ? `<input class="hidden-file" name="${field.id}_photo_input" data-photo-input="${field.id}" type="file" accept="image/*" multiple /><input type="hidden" name="${field.id}_photos" value="[]" /><div class="photo-strip" data-photo-strip="${field.id}"></div>` : ""}
+      ${options.photo ? `<input class="hidden-file" name="${field.id}_photo_camera" data-photo-input="${field.id}" data-photo-source="camera" type="file" accept="image/*" capture="environment" /><input class="hidden-file" name="${field.id}_photo_gallery" data-photo-input="${field.id}" data-photo-source="gallery" type="file" accept="image/*" multiple /><input type="hidden" name="${field.id}_photos" value="[]" /><div class="photo-strip" data-photo-strip="${field.id}"></div>` : ""}
       ${options.audio ? `<input type="hidden" name="${field.id}_audio" /><input type="hidden" name="${field.id}_transcript" /><div class="audio-strip" data-audio-preview="${field.id}"></div>` : ""}
       ${options.location || options.check ? `<input type="hidden" name="${field.id}_location" /><span class="small location-note" data-location-note="${field.id}">${isSignature ? "Localização será capturada ao assinar." : "Localização será capturada ao selecionar o resultado."}</span>` : ""}
       ${options.selfieDoc ? `<input type="hidden" name="${field.id}_selfieDoc_existing" /><div class="form-row"><label>Foto da pessoa com documento</label><input name="${field.id}_selfieDoc" type="file" accept="image/*" capture="user" /></div>` : ""}
@@ -1743,6 +1760,7 @@ function renderSignaturePreview(fieldId, src) {
 function openSignatureModal(fieldId) {
   const title = document.querySelector(`[data-field-id="${fieldId}"] h3`)?.textContent || "Assinatura";
   const existing = document.querySelector(`input[name="${fieldId}_signature"]`)?.value || "";
+  lockSignatureOrientation();
   const modal = document.createElement("div");
   modal.className = "modal-backdrop signature-backdrop";
   modal.innerHTML = `
@@ -1752,7 +1770,7 @@ function openSignatureModal(fieldId) {
           <span class="template-kicker">Assinatura</span>
           <h2>${escapeHtml(title)}</h2>
         </div>
-        <button class="icon-button" data-action="close-this-modal" type="button" title="Fechar">×</button>
+        <button class="icon-button" data-action="close-signature-modal" type="button" title="Fechar">×</button>
       </div>
       <div class="signature-board">
         <canvas class="signature-pad signature-pad-large" data-signature="${fieldId}"></canvas>
@@ -1770,6 +1788,30 @@ function openSignatureModal(fieldId) {
   if (existing) drawSignatureOnCanvas(canvas, existing);
 }
 
+async function lockSignatureOrientation() {
+  document.documentElement.classList.add("signature-landscape-open");
+  try {
+    if (!window.screen?.orientation?.lock) return;
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      await document.documentElement.requestFullscreen().catch(() => {});
+    }
+    await window.screen.orientation.lock("landscape").catch(() => {});
+  } catch {
+    // Browsers can deny orientation lock outside installed/fullscreen contexts.
+  }
+}
+
+function unlockSignatureOrientation() {
+  document.documentElement.classList.remove("signature-landscape-open");
+  window.screen?.orientation?.unlock?.();
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+
+function closeSignatureModal() {
+  document.querySelector(".signature-backdrop")?.remove();
+  unlockSignatureOrientation();
+}
+
 function saveSignature(fieldId) {
   const modal = document.querySelector(".signature-backdrop");
   const temp = modal?.querySelector(`input[name="${fieldId}_signature_temp"]`)?.value || "";
@@ -1777,7 +1819,7 @@ function saveSignature(fieldId) {
   setInputValue(`${fieldId}_signature`, temp);
   renderSignaturePreview(fieldId, temp);
   captureLocation(fieldId, { silent: true });
-  modal?.remove();
+  closeSignatureModal();
 }
 
 function clearSignature(fieldId) {
@@ -2361,12 +2403,16 @@ function handleGlobalClick(event) {
   if (action === "open-fill-picker") openFillPickerModal();
   if (action === "select-check-status") selectCheckStatus(target.dataset.field, target.dataset.value);
   if (action === "open-photo-picker") openPhotoPicker(target.dataset.field);
+  if (action === "photo-camera") triggerPhotoInput(target.dataset.field, "camera");
+  if (action === "photo-gallery") triggerPhotoInput(target.dataset.field, "gallery");
   if (action === "remove-photo") removePhoto(target.dataset.field, Number(target.dataset.index));
+  if (action === "view-photo") openPhotoPreview(target.dataset.field, Number(target.dataset.index));
   if (action === "open-observation-modal") openObservationModal(target.dataset.field);
   if (action === "save-observation") saveObservation(target.dataset.field);
   if (action === "open-signature-modal") openSignatureModal(target.dataset.field);
   if (action === "save-signature") saveSignature(target.dataset.field);
   if (action === "clear-signature") clearSignature(target.dataset.field);
+  if (action === "close-signature-modal") closeSignatureModal();
   if (action === "close-this-modal") target.closest(".modal-backdrop")?.remove();
   if (action === "capture-location") captureLocation(target.dataset.field);
   if (action === "start-audio") startAudio(target.dataset.field);
@@ -2432,19 +2478,43 @@ function handleInput(event) {
 
 function closeModal() {
   const modals = document.querySelectorAll(".modal-backdrop");
+  if (modals[modals.length - 1]?.classList.contains("signature-backdrop")) unlockSignatureOrientation();
   modals[modals.length - 1]?.remove();
   mediaRecorder = null;
   chunks = [];
 }
 
 function closeAllModals() {
+  if (document.querySelector(".signature-backdrop")) unlockSignatureOrientation();
   document.querySelectorAll(".modal-backdrop").forEach((modal) => modal.remove());
   mediaRecorder = null;
   chunks = [];
 }
 
 function openPhotoPicker(fieldId) {
-  document.querySelector(`[data-photo-input="${fieldId}"]`)?.click();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop photo-source-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal photo-source-modal">
+      <div class="topbar">
+        <div>
+          <h2>Adicionar foto</h2>
+          <p>Use a câmera agora ou escolha imagens da galeria.</p>
+        </div>
+        <button class="icon-button" data-action="close-this-modal" type="button">×</button>
+      </div>
+      <div class="photo-source-actions">
+        <button class="primary-button icon-text" data-action="photo-camera" data-field="${fieldId}" type="button">${iconCamera()} Tirar foto</button>
+        <button class="secondary-button icon-text" data-action="photo-gallery" data-field="${fieldId}" type="button">${iconUi("gallery")} Galeria</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+}
+
+function triggerPhotoInput(fieldId, source) {
+  document.querySelector(`[data-photo-input="${fieldId}"][data-photo-source="${source}"]`)?.click();
+  document.querySelector(".photo-source-backdrop")?.remove();
 }
 
 async function addPhotosFromInput(input) {
@@ -2475,10 +2545,32 @@ function renderPhotoStrip(fieldId) {
   const photos = safeJson(hidden.value, []);
   strip.innerHTML = photos.map((src, index) => `
     <figure class="thumb">
-      <img src="${src}" alt="Foto ${index + 1}" />
+      <button class="thumb-preview" data-action="view-photo" data-field="${fieldId}" data-index="${index}" type="button" title="Visualizar foto">
+        <img src="${src}" alt="Foto ${index + 1}" />
+      </button>
       <button data-action="remove-photo" data-field="${fieldId}" data-index="${index}" type="button" title="Excluir foto">×</button>
     </figure>
   `).join("");
+}
+
+function openPhotoPreview(fieldId, index) {
+  const photos = safeJson(document.querySelector(`input[name="${fieldId}_photos"]`)?.value || "[]", []);
+  const src = photos[index];
+  if (!src) return;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop photo-preview-backdrop";
+  modal.innerHTML = `
+    <section class="modal photo-preview-modal">
+      <div class="topbar">
+        <div>
+          <h2>Foto ${index + 1}</h2>
+        </div>
+        <button class="icon-button" data-action="close-this-modal" type="button">×</button>
+      </div>
+      <img src="${src}" alt="Foto ${index + 1}" />
+    </section>
+  `;
+  document.body.appendChild(modal);
 }
 
 function openObservationModal(fieldId) {
