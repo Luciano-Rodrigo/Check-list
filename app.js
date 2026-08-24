@@ -172,6 +172,7 @@ function migrateState(nextState) {
     tpl.statusOkIcon ||= "check";
     tpl.statusFailIcon ||= "close";
     tpl.headerFields ||= [];
+    tpl.fields = (tpl.fields || []).map(normalizeTemplateField);
   });
   nextState.tasks.forEach((task) => {
     task.templateId ||= "";
@@ -605,8 +606,10 @@ function statusLabels(tpl = {}) {
   return {
     okLabel: tpl.statusOkLabel || "Correto",
     failLabel: tpl.statusFailLabel || "Incorreto",
+    ntLabel: "Não tem",
     okIcon: tpl.statusOkIcon || "check",
     failIcon: tpl.statusFailIcon || "close",
+    ntIcon: "nt",
   };
 }
 
@@ -622,6 +625,7 @@ function statusChoiceIcon(name) {
     flag: `<span class="status-symbol">F</span>`,
     wrench: `<span class="status-symbol">A</span>`,
     ban: `<span class="status-symbol">B</span>`,
+    nt: `<span class="status-symbol">NT</span>`,
   };
   return icons[name] || iconUi("check");
 }
@@ -1068,15 +1072,74 @@ function statusIconOptions(kind) {
 function addBuilderField(seed) {
   const holder = document.getElementById("builder-fields");
   if (!holder) return;
+  const field = seed ? normalizeTemplateField(seed) : null;
   const node = templateEl.content.firstElementChild.cloneNode(true);
-  if (seed) {
-    node.querySelector(".field-title").value = seed.title || "";
-    node.querySelector(".field-kind").value = seed.kind || "inspection";
+  if (field) {
+    node.querySelector(".field-title").value = field.title || "";
+    node.querySelector(".field-kind").value = field.kind || "inspection";
     node.querySelectorAll("[data-option]").forEach((input) => {
-      input.checked = Boolean(seed.options?.[input.dataset.option]);
+      input.checked = Boolean(field.options?.[input.dataset.option]);
     });
   }
+  applyBuilderKindDefaults(node, !field);
   holder.appendChild(node);
+}
+
+function normalizeTemplateField(field = {}) {
+  const kind = field.kind === "signature" ? "signature" : "inspection";
+  const options = { ...(field.options || {}) };
+  if (kind === "signature") {
+    return {
+      ...field,
+      kind,
+      options: {
+        check: false,
+        text: false,
+        photo: false,
+        audio: false,
+        location: true,
+        selfieDoc: options.selfieDoc !== false,
+      },
+    };
+  }
+  return {
+    ...field,
+    kind,
+    options: {
+      check: options.check !== false,
+      text: Boolean(options.text),
+      photo: Boolean(options.photo),
+      audio: Boolean(options.audio),
+      location: Boolean(options.location),
+      selfieDoc: Boolean(options.selfieDoc),
+    },
+  };
+}
+
+function applyBuilderKindDefaults(node, applyDefaults = false) {
+  const isSignature = node.querySelector(".field-kind")?.value === "signature";
+  const options = {
+    check: node.querySelector('[data-option="check"]'),
+    text: node.querySelector('[data-option="text"]'),
+    photo: node.querySelector('[data-option="photo"]'),
+    audio: node.querySelector('[data-option="audio"]'),
+    location: node.querySelector('[data-option="location"]'),
+    selfieDoc: node.querySelector('[data-option="selfieDoc"]'),
+  };
+  if (isSignature) {
+    if (options.check) options.check.checked = false;
+    if (options.text) options.text.checked = false;
+    if (options.photo) options.photo.checked = false;
+    if (options.audio) options.audio.checked = false;
+    if (options.location) options.location.checked = true;
+    if (options.selfieDoc && applyDefaults && !options.selfieDoc.dataset.userChanged) options.selfieDoc.checked = true;
+  } else if (options.check && applyDefaults && !options.check.dataset.userChanged) {
+    options.check.checked = true;
+  }
+  ["check", "text", "photo", "audio"].forEach((key) => {
+    if (options[key]) options[key].disabled = isSignature;
+  });
+  if (options.location) options.location.disabled = isSignature;
 }
 
 function addHeaderField(seed = {}) {
@@ -1382,6 +1445,7 @@ function pdfStatusLabel(report, answer) {
   const labels = statusLabels(report);
   if (status === "ok") return `${pdfIconLabel(labels.okIcon)} ${labels.okLabel}`;
   if (status === "fail") return `${pdfIconLabel(labels.failIcon)} ${labels.failLabel}`;
+  if (status === "nt") return "NT Nao tem";
   return answer.kind === "signature" ? "Assinatura solicitada" : "Nao marcado";
 }
 
@@ -1568,15 +1632,16 @@ function pdfSummaryCards(stats, labels, accent, x, y) {
     ["Total de itens", stats.total],
     [labels.okLabel, stats.ok],
     [labels.failLabel, stats.fail],
+    [labels.ntLabel, stats.nt],
     ["Evidencias", stats.evidence],
   ];
   return cards.flatMap(([label, value], index) => {
-    const cardX = x + index * 128;
+    const cardX = x + index * 102;
     return [
-      "0.96 0.98 1 rg " + `${cardX} ${y} 116 66 re f`,
-      "0.85 0.89 0.95 RG " + `${cardX} ${y} 116 66 re S`,
-      pdfText(normalizePdfText(label).toUpperCase(), cardX + 12, y + 43, 7.5, "0.35 0.42 0.54"),
-      pdfText(String(value), cardX + 12, y + 18, 24, index === 2 ? "0.8 0.12 0.12" : accent),
+      "0.96 0.98 1 rg " + `${cardX} ${y} 92 66 re f`,
+      "0.85 0.89 0.95 RG " + `${cardX} ${y} 92 66 re S`,
+      pdfText(normalizePdfText(label).toUpperCase(), cardX + 9, y + 43, 7, "0.35 0.42 0.54"),
+      pdfText(String(value), cardX + 9, y + 18, 23, index === 2 ? "0.8 0.12 0.12" : index === 3 ? "0.64 0.42 0.08" : accent),
     ];
   });
 }
@@ -1720,6 +1785,7 @@ function renderRuntimeField(field, tpl = {}) {
           ${options.check ? `
             <button class="status-button ok" data-action="select-check-status" data-field="${field.id}" data-value="ok" type="button" title="${escapeHtml(labels.okLabel)}" aria-label="${escapeHtml(labels.okLabel)}">${statusChoiceIcon(labels.okIcon)}</button>
             <button class="status-button fail" data-action="select-check-status" data-field="${field.id}" data-value="fail" type="button" title="${escapeHtml(labels.failLabel)}" aria-label="${escapeHtml(labels.failLabel)}">${statusChoiceIcon(labels.failIcon)}</button>
+            <button class="status-button nt" data-action="select-check-status" data-field="${field.id}" data-value="nt" type="button" title="${escapeHtml(labels.ntLabel)}" aria-label="${escapeHtml(labels.ntLabel)}">${statusChoiceIcon(labels.ntIcon)}</button>
             <input type="hidden" name="${field.id}_status" />
           ` : ""}
         </div>
@@ -1973,6 +2039,7 @@ function reportHtml(report) {
       <article><span>Total de itens</span><strong>${stats.total}</strong></article>
       <article><span>${escapeHtml(labels.okLabel)}</span><strong>${stats.ok}</strong></article>
       <article><span>${escapeHtml(labels.failLabel)}</span><strong>${stats.fail}</strong></article>
+      <article><span>${escapeHtml(labels.ntLabel)}</span><strong>${stats.nt}</strong></article>
       <article><span>Evidências</span><strong>${stats.evidence}</strong></article>
     </section>
 
@@ -1984,7 +2051,7 @@ function reportHtml(report) {
         <h2>Resumo executivo</h2>
       </div>
       <p class="report-summary-text">
-        Checklist preenchido com ${stats.total} item(ns). Foram registrados ${stats.ok} item(ns) como ${escapeHtml(labels.okLabel)}, ${stats.fail} como ${escapeHtml(labels.failLabel)} e ${stats.evidence} evidência(s) operacional(is).
+        Checklist preenchido com ${stats.total} item(ns). Foram registrados ${stats.ok} item(ns) como ${escapeHtml(labels.okLabel)}, ${stats.fail} como ${escapeHtml(labels.failLabel)}, ${stats.nt} como ${escapeHtml(labels.ntLabel)} e ${stats.evidence} evidência(s) operacional(is).
       </p>
       ${failed.length ? `
         <div class="report-alert">
@@ -2042,9 +2109,10 @@ function reportStats(report) {
     acc.total += 1;
     if (status === "ok") acc.ok += 1;
     if (status === "fail") acc.fail += 1;
+    if (status === "nt") acc.nt += 1;
     if (photos || answer.selfieDoc || answer.signature || answer.audio || answer.text || answer.transcript || answer.location) acc.evidence += 1;
     return acc;
-  }, { total: 0, ok: 0, fail: 0, evidence: 0 });
+  }, { total: 0, ok: 0, fail: 0, nt: 0, evidence: 0 });
 }
 
 function reportStatusValue(answer) {
@@ -2166,6 +2234,7 @@ function renderReportStatus(answer, report = {}) {
   const labels = statusLabels(report);
   if (status === "ok") return `<span class="report-status ok">${statusChoiceIcon(labels.okIcon)} ${escapeHtml(labels.okLabel)}</span>`;
   if (status === "fail") return `<span class="report-status fail">${statusChoiceIcon(labels.failIcon)} ${escapeHtml(labels.failLabel)}</span>`;
+  if (status === "nt") return `<span class="report-status nt">${statusChoiceIcon(labels.ntIcon)} ${escapeHtml(labels.ntLabel)}</span>`;
   return "";
 }
 
@@ -2240,12 +2309,12 @@ function submitTemplate(form, data) {
     node.querySelectorAll("[data-option]").forEach((input) => {
       options[input.dataset.option] = input.checked;
     });
-    return {
+    return normalizeTemplateField({
       id: uid(),
       title: node.querySelector(".field-title").value.trim(),
       kind: node.querySelector(".field-kind").value,
       options,
-    };
+    });
   }).filter((field) => field?.title);
   if (!fields.length) return alert("Adicione pelo menos um campo.");
   const existingId = form.dataset.templateId || "";
@@ -2498,12 +2567,10 @@ function handleChange(event) {
   const input = event.target;
   if (input.matches("[data-photo-input]")) addPhotosFromInput(input);
   else if (input.matches('input[type="file"]')) previewFile(input);
+  if (input.matches("[data-option]")) input.dataset.userChanged = "true";
   if (input.matches(".field-kind")) {
     const node = input.closest(".builder-field");
-    const isSignature = input.value === "signature";
-    node.querySelector('[data-option="check"]').checked = !isSignature;
-    node.querySelector('[data-option="selfieDoc"]').checked = isSignature;
-    node.querySelector('[data-option="location"]').checked = isSignature;
+    applyBuilderKindDefaults(node, true);
   }
 }
 

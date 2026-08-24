@@ -1000,6 +1000,10 @@ textarea {
   color: var(--fail);
 }
 
+.status-button.nt {
+  color: var(--warning);
+}
+
 .status-button.selected {
   transform: scale(1.14);
   opacity: 1;
@@ -1172,7 +1176,7 @@ textarea {
 .report-identity,
 .report-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 1px;
   overflow: hidden;
   padding: 0;
@@ -1344,6 +1348,11 @@ textarea {
 .report-status.fail {
   color: #b42318;
   background: #fee4e2;
+}
+
+.report-status.nt {
+  color: #92400e;
+  background: #fef3c7;
 }
 
 .report-status svg {
@@ -2139,7 +2148,7 @@ textarea {
   }
 
   .inspection-card {
-    grid-template-columns: 88px 1fr;
+    grid-template-columns: 132px 1fr;
     gap: 7px;
     min-height: 58px;
     padding: 8px;
@@ -2174,7 +2183,7 @@ textarea {
   }
 
   .status-button {
-    width: 38px;
+    width: 36px;
     height: 38px;
   }
 
