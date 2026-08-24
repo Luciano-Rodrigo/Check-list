@@ -1,4 +1,4 @@
-const CACHE_NAME = "luma-checklist-profissional-v11";
+const CACHE_NAME = "luma-checklist-profissional-v12";
 const ASSETS = [
   "./",
   "./index.html",

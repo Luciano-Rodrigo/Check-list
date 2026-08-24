@@ -33,6 +33,7 @@ let chunks = [];
 
 const app = document.getElementById("app");
 const templateEl = document.getElementById("field-template");
+const DEFAULT_SIGNATURE_TITLE = "Assinatura do responsável";
 
 document.addEventListener("click", handleGlobalClick);
 document.addEventListener("submit", handleSubmit);
@@ -1075,6 +1076,7 @@ function addBuilderField(seed) {
   const field = seed ? normalizeTemplateField(seed) : null;
   const node = templateEl.content.firstElementChild.cloneNode(true);
   if (field) {
+    node.dataset.fieldId = field.id || "";
     node.querySelector(".field-title").value = field.title || "";
     node.querySelector(".field-kind").value = field.kind || "inspection";
     node.querySelectorAll("[data-option]").forEach((input) => {
@@ -1088,9 +1090,11 @@ function addBuilderField(seed) {
 function normalizeTemplateField(field = {}) {
   const kind = field.kind === "signature" ? "signature" : "inspection";
   const options = { ...(field.options || {}) };
+  const title = String(field.title || "").trim();
   if (kind === "signature") {
     return {
       ...field,
+      title: title || DEFAULT_SIGNATURE_TITLE,
       kind,
       options: {
         check: false,
@@ -1104,6 +1108,7 @@ function normalizeTemplateField(field = {}) {
   }
   return {
     ...field,
+    title,
     kind,
     options: {
       check: options.check !== false,
@@ -1118,6 +1123,7 @@ function normalizeTemplateField(field = {}) {
 
 function applyBuilderKindDefaults(node, applyDefaults = false) {
   const isSignature = node.querySelector(".field-kind")?.value === "signature";
+  const title = node.querySelector(".field-title");
   const options = {
     check: node.querySelector('[data-option="check"]'),
     text: node.querySelector('[data-option="text"]'),
@@ -1127,6 +1133,10 @@ function applyBuilderKindDefaults(node, applyDefaults = false) {
     selfieDoc: node.querySelector('[data-option="selfieDoc"]'),
   };
   if (isSignature) {
+    if (title) {
+      title.placeholder = DEFAULT_SIGNATURE_TITLE;
+      if (applyDefaults && !title.value.trim()) title.value = DEFAULT_SIGNATURE_TITLE;
+    }
     if (options.check) options.check.checked = false;
     if (options.text) options.text.checked = false;
     if (options.photo) options.photo.checked = false;
@@ -1134,6 +1144,10 @@ function applyBuilderKindDefaults(node, applyDefaults = false) {
     if (options.location) options.location.checked = true;
     if (options.selfieDoc && applyDefaults && !options.selfieDoc.dataset.userChanged) options.selfieDoc.checked = true;
   } else if (options.check && applyDefaults && !options.check.dataset.userChanged) {
+    if (title) {
+      title.placeholder = "Ponto a ser checado";
+      if (title.value.trim() === DEFAULT_SIGNATURE_TITLE) title.value = "";
+    }
     options.check.checked = true;
   }
   ["check", "text", "photo", "audio"].forEach((key) => {
@@ -2310,12 +2324,12 @@ function submitTemplate(form, data) {
       options[input.dataset.option] = input.checked;
     });
     return normalizeTemplateField({
-      id: uid(),
+      id: node.dataset.fieldId || uid(),
       title: node.querySelector(".field-title").value.trim(),
       kind: node.querySelector(".field-kind").value,
       options,
     });
-  }).filter((field) => field?.title);
+  }).filter((field) => field?.title || field?.kind === "signature");
   if (!fields.length) return alert("Adicione pelo menos um campo.");
   const existingId = form.dataset.templateId || "";
   const existing = state.templates.find((tpl) => tpl.id === existingId);
