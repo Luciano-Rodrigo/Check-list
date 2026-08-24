@@ -1520,9 +1520,9 @@ textarea {
 
 .inspection-card {
   display: grid;
-  grid-template-columns: 108px 1fr auto;
+  grid-template-columns: 164px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   min-height: 66px;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent-color, var(--primary)) 50%, var(--line));
@@ -1535,6 +1535,7 @@ textarea {
 
 .inspection-card h3 {
   margin: 0;
+  min-width: 0;
   text-align: left;
   font-size: 15px;
   font-style: normal;
@@ -1562,7 +1563,7 @@ textarea {
 .inspection-actions {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 12px;
 }
 
@@ -1574,6 +1575,8 @@ textarea {
 .status-button {
   width: 42px;
   height: 42px;
+  display: grid;
+  place-items: center;
   border: 0;
   background: transparent;
   font-size: 0;
@@ -1587,6 +1590,9 @@ textarea {
 }
 
 .status-symbol {
+  display: inline-grid;
+  min-width: 28px;
+  place-items: center;
   font-size: 16px;
   font-weight: 900;
   line-height: 1;
@@ -2148,8 +2154,8 @@ textarea {
   }
 
   .inspection-card {
-    grid-template-columns: 132px 1fr;
-    gap: 7px;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
     min-height: 58px;
     padding: 8px;
   }
@@ -2160,12 +2166,16 @@ textarea {
 
   .inspection-status {
     order: 1;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
     gap: 6px;
   }
 
   .inspection-card h3 {
     order: 2;
+    grid-column: 1 / -1;
     font-size: 13px;
+    padding-top: 2px;
   }
 
   .inspection-actions {
