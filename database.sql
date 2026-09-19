@@ -76,3 +76,42 @@ create table if not exists daily_tasks (
   payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+
+create table if not exists app_sessions (
+  token_hash text primary key,
+  user_id text not null references app_users(id) on delete cascade,
+  expires_at timestamptz not null
+);
+
+create table if not exists plan_billing (
+  workspace_id text primary key references access_workspaces(id) on delete cascade,
+  owner_user_id text not null references app_users(id) on delete cascade,
+  customer_id text,
+  subscription_id text,
+  pix_authorization_id text,
+  payment_id text,
+  method text,
+  status text not null default 'pending',
+  paid_until timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+alter table plan_billing add column if not exists amount numeric(12,2);
+alter table plan_billing add column if not exists terms_accepted_at timestamptz;
+alter table plan_billing add column if not exists pix_activation_granted boolean not null default false;
+
+create table if not exists checklist_usage (
+  submission_id text primary key,
+  user_id text not null references app_users(id) on delete cascade,
+  usage_day text not null
+);
+create index if not exists idx_checklist_usage_day on checklist_usage(user_id, usage_day);
+insert into checklist_usage(submission_id,user_id,usage_day)
+  select id,filled_by_user_id,to_char(created_at at time zone 'America/Sao_Paulo','YYYY-MM-DD')
+  from checklist_submissions where filled_by_user_id is not null
+  on conflict do nothing;
+
+create table if not exists asaas_webhook_events (
+  id text primary key,
+  received_at timestamptz not null default now()
+);

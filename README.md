@@ -4,9 +4,7 @@ Produto Luma para criar modelos de checklist, preencher evidências, registrar l
 
 ## Como abrir
 
-Abra `index.html` diretamente no navegador para testar a maior parte do sistema com fallback local.
-
-Para testar com o backend Node, API e fallback de banco:
+O cadastro, login e as regras de plano dependem do backend Node:
 
 ```powershell
 cd "C:\Users\luref\OneDrive\Desktop\Projetos\Check list profissional"
@@ -20,7 +18,7 @@ Depois acesse:
 http://127.0.0.1:5173
 ```
 
-Sem `DATABASE_URL`, o servidor responde a API usando estado inicial em memória e o navegador mantém fallback em `localStorage`.
+Sem `DATABASE_URL`, o backend usa memória apenas para desenvolvimento; dados somem ao reiniciar. Para produção, configure PostgreSQL.
 
 Para regenerar os ícones PWA a partir da logo SVG:
 
@@ -28,16 +26,22 @@ Para regenerar os ícones PWA a partir da logo SVG:
 npm run icons
 ```
 
-## Acesso demo
+## Acesso administrativo local
 
 ```text
 Email: admin@luma.com
-Senha: admin123
+Senha: admin123 (apenas no ambiente local; defina `ADMIN_PASSWORD` antes de publicar)
 ```
 
 ## O que esta versão entrega
 
-- Login e cadastro com verificação de email simulada.
+- Login por sessão no servidor e senha armazenada como hash scrypt.
+- Cadastro em três etapas: individual ou empresa, informações e escolha do plano.
+- Individual gratuito: 3 preenchimentos por dia, modelos próprios e tarefas; individual pago: preenchimentos ilimitados e comunidade.
+- Empresa gratuita: 2 preenchimentos por dia por acesso e até 2 colaboradores; empresa paga: preenchimentos ilimitados e até 5 colaboradores.
+- Cotas diárias em America/Sao_Paulo, preservadas mesmo ao excluir preenchimentos; controle de revisão evita sobrescrita silenciosa entre dispositivos.
+- No retorno ao gratuito, colaboradores excedentes ficam suspensos sem apagar dados; os dois mais antigos mantêm acesso.
+- Conta paga é ativada após confirmação do Asaas por webhook autenticado. Cartão usa a Fatura Asaas; Pix Automático depende da elegibilidade da conta Asaas.
 - Papéis ADM, Empresa, Agente e Pessoal.
 - Criação de modelos públicos ou privados.
 - Categoria e cor visual para os modelos.
@@ -55,7 +59,7 @@ Senha: admin123
 - Geração de PDF via impressão do navegador.
 - Tarefas simples e recorrentes com janela de funcionamento e modelo de checklist vinculado.
 - Notificações enquanto o app estiver aberto.
-- Botão flutuante para preencher checklist rapidamente.
+- Botões rápidos para tarefa e preenchimento de checklist.
 - Opções avançadas de arte para modelos: cor, categoria, cabeçalho e borda.
 - Tema claro e escuro.
 - PWA instalável com manifesto, service worker, ícone Luma, favicon e Apple touch icon.
@@ -66,15 +70,25 @@ Senha: admin123
 - Cada cadastro de Empresa ou Pessoal cria seu próprio workspace zerado no banco.
 - Agentes ficam isolados dentro do workspace da empresa que os criou.
 - O ADM consegue ler todos os workspaces.
-- Fallback local via `localStorage` quando aberto sem API.
+- API de estado exige sessão e limita os registros visíveis à empresa ou pessoa autenticada.
 
 ## Deploy na Railway
 
-1. Crie um projeto na Railway.
-2. Adicione um serviço PostgreSQL.
-3. Adicione este repositório como serviço Node.
-4. Garanta que a variável `DATABASE_URL` do PostgreSQL esteja disponível no serviço web.
-5. O comando de start já está em `railway.json` e `package.json`: `npm start`.
+Passo a passo completo, variáveis, webhook e checklist de publicação: [DEPLOY-RAILWAY.md](DEPLOY-RAILWAY.md).
+
+- Runtime configurado: Node.js 22, build Railpack e início direto com `node server.js`.
+- Healthcheck: `/api/health`, com consulta real ao PostgreSQL.
+- As tabelas e a migração inicial são executadas em transação antes de abrir a porta HTTP. Uma trava no banco serializa inicializações concorrentes.
+- Em produção, banco e senha administrativa forte são obrigatórios; cobranças configuradas também exigem ambiente Asaas explícito e token de webhook com pelo menos 32 caracteres.
+- A chave da API deve ficar em **`ASAAS_API_KEY`**, nas variáveis do serviço web, nunca no frontend ou no GitHub.
+
+O plano gratuito não precisa do Asaas. Cartão é preenchido na página hospedada pelo Asaas, sem dados de cartão passarem pelo aplicativo. Pix Automático requer conta Asaas elegível e autorização do pagador. O webhook libera o acesso após confirmação; abrir a fatura ou gerar o QR Code não ativa o plano.
+
+Para validar os limites e o webhook com Asaas simulado:
+
+```powershell
+npm test
+```
 
 O backend cria automaticamente as tabelas principais:
 
@@ -85,8 +99,16 @@ checklist_models
 checklist_model_assignments
 checklist_submissions
 daily_tasks
+app_sessions
+plan_billing
+asaas_webhook_events
+checklist_usage
 ```
 
 ## Observação técnica
+
+Pesquisa de preços, decisões de interface e pendências de lançamento: [PESQUISA-PRODUTO.md](PESQUISA-PRODUTO.md).
+
+Por padrão, os testes usam memória e Asaas simulado, isolados de `DATABASE_URL`. Quando `TEST_DATABASE_URL` aponta para um banco exclusivo de testes, a mesma suíte roda com PostgreSQL em um schema temporário e valida persistência após reinício. O workflow do GitHub executa ambos os modos com um PostgreSQL descartável, sem chaves reais. Não substitui a homologação com Asaas Sandbox. Não houve cobrança real nesta entrega.
 
 O banco agora usa tabelas separadas por tipo de cadastro e todas as tabelas operacionais possuem `workspace_id`. Isso entrega isolamento por acesso sem criar nomes dinâmicos de tabela por usuário, que é mais seguro e mais fácil de manter no PostgreSQL. A tabela antiga `app_state` ainda é criada apenas para migração automática de dados antigos, caso já exista um deploy anterior.

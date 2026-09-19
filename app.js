@@ -8,7 +8,6 @@ const initialState = {
       name: "Administrador Luma",
       email: "admin@luma.com",
       phone: "",
-      password: "admin123",
       role: "adm",
       companyId: "luma",
       verified: true,
@@ -25,7 +24,13 @@ let currentUser = null;
 let currentPage = "dashboard";
 let selectedTaskDate = toDateKey(new Date());
 let authMode = "login";
-let pendingVerification = null;
+let signupStep = "kind";
+let signupDraft = {};
+let planPrices = { personal: 9.90, company: 15.90 };
+let saveQueue = Promise.resolve();
+let stateEpoch = 0;
+let adminSeedsAdded = false;
+const modalReturnFocus = new WeakMap();
 let mediaRecorder = null;
 let currentAudioField = "";
 let deferredInstallPrompt = null;
@@ -39,6 +44,7 @@ document.addEventListener("click", handleGlobalClick);
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("change", handleChange);
 document.addEventListener("input", handleInput);
+document.addEventListener("keydown", handleModalKeydown);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -47,8 +53,14 @@ window.addEventListener("beforeinstallprompt", (event) => {
   });
 });
 document.addEventListener("DOMContentLoaded", async () => {
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(STORE_KEY);
+  const planResponse = await fetch("/api/plans").catch(() => null);
+  if (planResponse?.ok) planPrices = (await planResponse.json()).prices || planPrices;
+  const authResponse = await fetch("/api/auth/me").catch(() => null);
+  currentUser = authResponse?.ok ? (await authResponse.json()).user : null;
   state = await loadState();
-  currentUser = getSessionUser();
+  if (adminSeedsAdded) { adminSeedsAdded = false; await saveState(); }
   applyTheme();
   render();
   startTaskTicker();
@@ -143,15 +155,7 @@ function buildSeedTemplates() {
 }
 
 async function loadState() {
-  const remote = await loadRemoteState();
-  if (remote) return remote;
-  const raw = localStorage.getItem(STORE_KEY);
-  if (!raw) {
-    localStorage.setItem(STORE_KEY, JSON.stringify(initialState));
-    return structuredClone(initialState);
-  }
-  const parsed = JSON.parse(raw);
-  return migrateState(parsed);
+  return await loadRemoteState() || { users: [], templates: [], submissions: [], tasks: [] };
 }
 
 function migrateState(nextState) {
@@ -159,8 +163,8 @@ function migrateState(nextState) {
   nextState.submissions ||= [];
   nextState.tasks ||= [];
   const existingIds = new Set(nextState.templates.map((tpl) => tpl.id));
-  buildSeedTemplates().forEach((tpl) => {
-    if (!existingIds.has(tpl.id)) nextState.templates.push(tpl);
+  if (currentUser?.role === "adm") buildSeedTemplates().forEach((tpl) => {
+    if (!existingIds.has(tpl.id)) { nextState.templates.push(tpl); adminSeedsAdded = true; }
   });
   nextState.templates.forEach((tpl, index) => {
     tpl.category ||= "Operação";
@@ -179,59 +183,85 @@ function migrateState(nextState) {
     task.templateId ||= "";
     task.completedLocation ||= "";
     task.dueDate ||= toDateKey(task.createdAt || new Date());
+    task.dueTime ||= task.startHour || "09:00";
+    task.notifyEnabled = Boolean(task.notifyEnabled);
+    task.notificationSentAt ||= null;
   });
-  saveMigratedState(nextState);
   return nextState;
 }
 
-function saveMigratedState(nextState) {
-  saveLocalState(nextState);
-  saveRemoteState(nextState);
-}
-
 function saveState() {
-  const savedLocally = saveLocalState(state);
-  saveRemoteState(state);
-  return savedLocally;
-}
-
-function saveLocalState(nextState) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(nextState));
-    return true;
-  } catch (error) {
-    console.warn("Não foi possível salvar todo o estado no armazenamento local.", error);
-    return false;
-  }
+  const epoch = stateEpoch;
+  const userId = currentUser?.id;
+  saveQueue = saveQueue.catch(() => {}).then(() => {
+    if (epoch !== stateEpoch || userId !== currentUser?.id) return false;
+    return saveRemoteState(structuredClone(state), epoch, userId);
+  });
+  return saveQueue;
 }
 
 async function loadRemoteState() {
   try {
     const response = await fetch("/api/state", { headers: { Accept: "application/json" } });
     if (!response.ok) return null;
+    stateEpoch++;
     return migrateState(await response.json());
   } catch {
     return null;
   }
 }
 
-function saveRemoteState(nextState) {
-  fetch("/api/state", {
+function mergeSavedState(sent, saved, current) {
+  const result = { ...saved };
+  for (const key of ["templates", "submissions", "tasks"]) {
+    const before = new Map(sent[key].map((item) => [item.id, item]));
+    const confirmed = new Map(saved[key].map((item) => [item.id, item]));
+    result[key] = current[key].map((item) => {
+      const old = before.get(item.id);
+      const canonical = confirmed.get(item.id);
+      if (!old || !canonical) return item;
+      const merged = { ...canonical };
+      for (const field of new Set([...Object.keys(old), ...Object.keys(item)])) {
+        if (JSON.stringify(old[field]) !== JSON.stringify(item[field])) {
+          if (Object.hasOwn(item, field)) merged[field] = item[field];
+          else delete merged[field];
+        }
+      }
+      return merged;
+    });
+    for (const item of saved[key]) if (!before.has(item.id) && !result[key].some((entry) => entry.id === item.id)) result[key].push(item);
+  }
+  return result;
+}
+
+function saveRemoteState(nextState, epoch, userId) {
+  return fetch("/api/state", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(nextState),
-  }).catch(() => {});
-}
-
-function getSessionUser() {
-  const id = localStorage.getItem(SESSION_KEY);
-  return state.users.find((user) => user.id === id) || null;
+  }).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || "Não foi possível salvar.");
+    }
+    const body = await response.json();
+    if (epoch !== stateEpoch || userId !== currentUser?.id) return false;
+    state = mergeSavedState(nextState, body.state, state);
+    return true;
+  }).catch(async (error) => {
+    if (epoch !== stateEpoch || userId !== currentUser?.id) return false;
+    stateEpoch++;
+    state = await loadState();
+    currentUser = (await fetch("/api/auth/me").then((response) => response.json()).catch(() => ({}))).user || null;
+    closeAllModals();
+    render();
+    alert(error.message);
+    return false;
+  });
 }
 
 function setSession(user) {
   currentUser = user;
-  if (user) localStorage.setItem(SESSION_KEY, user.id);
-  else localStorage.removeItem(SESSION_KEY);
 }
 
 async function installApp() {
@@ -260,10 +290,7 @@ function applyTheme() {
 function visibleTemplates() {
   if (!currentUser) return [];
   if (currentUser.role === "adm") return state.templates;
-  if (currentUser.role === "agent") {
-    return state.templates.filter((tpl) => tpl.visibility === "public" || tpl.assignedAgentIds.includes(currentUser.id));
-  }
-  return state.templates.filter((tpl) => tpl.visibility === "public" || tpl.ownerId === currentUser.id || tpl.companyId === currentUser.companyId);
+  return state.templates;
 }
 
 function ownTemplates() {
@@ -291,6 +318,25 @@ function agentsForCompany() {
   return state.users.filter((user) => user.role === "agent" && user.companyId === currentUser.companyId);
 }
 
+function planOwner() {
+  return currentUser?.role === "agent"
+    ? state.users.find((user) => user.role === "company" && user.companyId === currentUser.companyId) || currentUser
+    : currentUser;
+}
+
+function isPaidPlan(user) {
+  return user?.role === "adm" || user?.plan === "paid" && user?.billingStatus === "active" && (!user?.paidUntil || Date.parse(user.paidUntil) > Date.now());
+}
+
+function dailyFillAllowance() {
+  const owner = planOwner();
+  const paid = isPaidPlan(owner);
+  const limit = paid ? Infinity : owner?.role === "company" ? 2 : 3;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const used = state.allowance?.day === today ? state.allowance.used : 0;
+  return { limit, used, remaining: Math.max(0, limit - used) };
+}
+
 function render() {
   if (!currentUser) {
     renderAuth();
@@ -312,11 +358,15 @@ function render() {
       ${currentUser.role !== "agent" ? navButton("templates", "Modelos", "models") : ""}
       ${navButton("fill", "Preencher", "check")}
       ${navButton("reports", "Checklists preenchidos", "filled")}
-      ${["adm", "company"].includes(currentUser.role) ? navButton("users", "Acessos", "users") : ""}
+      ${["adm", "company"].includes(currentUser.role) ? navButton("users", currentUser.role === "adm" ? "ADM" : "Acessos", "users") : ""}
     </nav>
   `;
-  const fabAction = currentPage === "tasks" ? "open-task-modal" : "open-fill-picker";
-  const fabLabel = currentPage === "tasks" ? "+ Criar tarefa" : "+ Preencher checklist";
+  const quickActions = currentPage === "users" ? "" : `
+    <div class="fab-stack" aria-label="Ações rápidas">
+      <button class="fab fab-secondary" data-action="open-task-modal" type="button">${iconUi("plus")} Tarefa</button>
+      <button class="fab" data-action="open-fill-picker" type="button">${iconUi("check")} Checklist</button>
+    </div>
+  `;
   app.innerHTML = `
     <div class="app-shell">
       <header class="mobile-appbar">
@@ -339,18 +389,19 @@ function render() {
         </div>
         ${navigation}
         <div class="sidebar-footer">
-          <span class="badge">${roleLabel(currentUser.role)}</span>
+          <span class="badge">${roleLabel(currentUser.role)} · ${isPaidPlan(planOwner()) ? "Pago" : "Gratuito"}</span>
           <div>
             <strong>${escapeHtml(currentUser.name)}</strong>
             <div class="small">${escapeHtml(currentUser.email)}</div>
           </div>
           <button class="secondary-button theme-button" data-action="toggle-theme" type="button">${iconUi("theme")} Alternar tema</button>
+          ${["company", "personal"].includes(currentUser.role) ? `<button class="secondary-button" data-action="manage-payment" type="button">Plano e pagamento</button>` : ""}
           <button class="danger-button logout-button" data-action="logout" type="button">${iconUi("logout")} Sair</button>
         </div>
       </aside>
       <div class="mobile-menu-backdrop" data-action="close-mobile-menu"></div>
       <main class="main">${content}</main>
-      <button class="fab" data-action="${fabAction}" type="button">${fabLabel}</button>
+      ${quickActions}
     </div>
   `;
 }
@@ -395,7 +446,7 @@ function renderAuth() {
           <button type="button" class="${authMode === "login" ? "active" : ""}" data-auth-mode="login">Entrar</button>
           <button type="button" class="${authMode === "signup" ? "active" : ""}" data-auth-mode="signup">Cadastrar</button>
         </div>
-        ${pendingVerification ? renderVerifyForm() : authMode === "login" ? renderLoginForm() : renderSignupForm()}
+        ${authMode === "login" ? renderLoginForm() : renderSignupForm()}
       </section>
       <section class="auth-visual">
         <h2>Controle operacional com evidências, assinatura e rastreabilidade.</h2>
@@ -421,104 +472,80 @@ function renderLoginForm() {
 }
 
 function renderSignupForm() {
+  if (signupStep === "kind") return `
+    <div class="signup-stage"><span>1 de 3</span><h2>Como você vai usar?</h2></div>
+    <div class="signup-options">
+      <button class="signup-option" type="button" data-action="signup-kind" data-kind="personal"><strong>Individual</strong><span>Seu espaço para tarefas e checklists.</span></button>
+      <button class="signup-option" type="button" data-action="signup-kind" data-kind="company"><strong>Empresa</strong><span>Organize a equipe e crie acessos para colaboradores.</span></button>
+    </div>`;
+  if (signupStep === "plan") return renderSignupPlans();
+  const company = signupDraft.kind === "company";
   return `
-    <form class="form" data-form="signup">
-      <div class="form-row">
-        <label>Tipo de acesso</label>
-        <select name="role" required>
-          <option value="company">Empresa</option>
-          <option value="personal">Pessoal</option>
-        </select>
-      </div>
+    <div class="signup-stage"><span>2 de 3</span><h2>${company ? "Dados da empresa" : "Seus dados"}</h2></div>
+    <form class="form" data-form="signup-details">
+      ${company ? `<div class="form-row"><label>Nome da empresa</label><input name="companyName" value="${escapeHtml(signupDraft.companyName || "")}" required /></div>` : ""}
       <div class="form-row">
         <label>Nome</label>
-        <input name="name" type="text" required />
+        <input name="name" type="text" autocomplete="name" value="${escapeHtml(signupDraft.name || "")}" required />
       </div>
       <div class="split">
         <div class="form-row">
           <label>Email</label>
-          <input name="email" type="email" required />
+          <input name="email" type="email" autocomplete="email" value="${escapeHtml(signupDraft.email || "")}" required />
         </div>
         <div class="form-row">
           <label>Telefone opcional</label>
-          <input name="phone" type="tel" />
+          <input name="phone" type="tel" value="${escapeHtml(signupDraft.phone || "")}" />
         </div>
       </div>
+      <div class="form-row"><label>${company ? "CNPJ" : "CPF"} opcional</label><input name="document" inputmode="numeric" maxlength="18" placeholder="Necessário para o plano pago" value="${escapeHtml(signupDraft.document || "")}" /></div>
       <div class="form-row">
         <label>Senha</label>
-        <input name="password" type="password" minlength="6" required />
+        <input name="password" type="password" autocomplete="new-password" minlength="8" required />
       </div>
-      <button class="primary-button" type="submit">Criar acesso</button>
+      <div class="toolbar"><button class="ghost-button" type="button" data-action="signup-back">Voltar</button><button class="primary-button" type="submit">Continuar</button></div>
     </form>
   `;
 }
 
-function renderVerifyForm() {
+function renderSignupPlans() {
+  const company = signupDraft.kind === "company";
+  const limit = company ? 2 : 3;
+  const seats = company ? "Até 2 colaboradores" : "Acesso individual";
+  const paidSeats = company ? "Até 5 colaboradores" : "Acesso individual";
+  const price = planPrices[company ? "company" : "personal"];
   return `
-    <form class="form" data-form="verify">
-      <p class="muted">Enviamos um código de verificação para ${escapeHtml(pendingVerification.email)}.</p>
-      <p class="small">Nesta versão local, o código é: <strong>${pendingVerification.code}</strong></p>
-      <div class="form-row">
-        <label>Código</label>
-        <input name="code" inputmode="numeric" required />
-      </div>
-      <button class="primary-button" type="submit">Verificar email</button>
-      <button class="ghost-button" type="button" data-action="cancel-verification">Voltar</button>
-    </form>
+    <div class="signup-stage"><span>3 de 3</span><h2>Escolha seu plano</h2><p>${escapeHtml(signupDraft.email || "")}</p></div>
+    <div class="plan-options">
+      <article class="plan-option"><span>Gratuito</span><h3>R$ 0</h3><p>${limit} preenchimentos por dia, por acesso</p><p>Checklists próprios e tarefas com notificações</p><p>${seats}</p><button class="secondary-button" type="button" data-action="signup-plan" data-plan="free">Começar grátis</button></article>
+      <article class="plan-option"><span>Pago</span><h3>${formatMoney(price)} <small>/ mês</small></h3><p>Preenchimentos ilimitados</p><p>Checklists próprios e da comunidade</p><p>Tarefas com notificações e ${paidSeats.toLowerCase()}</p><button class="primary-button" type="button" data-action="signup-plan" data-plan="paid">Assinar</button></article>
+    </div><button class="ghost-button" type="button" data-action="signup-back">Voltar</button>
   `;
+}
+
+function formatMoney(value) {
+  return Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function renderDashboard() {
-  const templates = visibleTemplates();
-  const submissions = visibleSubmissions();
   const tasks = visibleTasks();
-  const todayTasks = tasks.filter((task) => !task.done && taskDateKey(task) === toDateKey(new Date()));
+  const todayKey = toDateKey(new Date());
+  const todayTasks = tasks
+    .filter((task) => !task.done && taskDateKey(task) === todayKey)
+    .sort((a, b) => taskSortValue(a).localeCompare(taskSortValue(b)));
+  const doneToday = tasks.filter((task) => task.done && taskDateKey(task) === todayKey).length;
   return `
-    ${pageHeader("Painel", "Visão geral dos modelos, preenchimentos e tarefas em andamento.")}
-    <section class="dashboard-hero">
+    ${pageHeader("Hoje", "")}
+    ${currentUser.selectedPlan === "paid" && !isPaidPlan(currentUser) ? `<div class="plan-pending"><span>${currentUser.paidUntil && Date.parse(currentUser.paidUntil) <= Date.now() ? "Assinatura vencida" : "Assinatura aguardando pagamento"}</span><button class="secondary-button" type="button" data-action="manage-payment">Continuar</button></div>` : ""}
+    <section class="today-focus">
       <div>
-        <span class="template-kicker">Produto Luma</span>
-        <h3>Checklists com evidência, assinatura e contexto operacional.</h3>
-        <p>Crie padrões de controle, distribua para equipes e transforme cada preenchimento em um registro pronto para auditoria.</p>
+        <h3>${todayTasks.length === 1 ? "1 tarefa pendente" : `${todayTasks.length} tarefas pendentes`}</h3>
+        <p>${formatDateOnly(todayKey)} · ${doneToday} concluída(s)</p>
       </div>
-      <div class="hero-actions">
-        <button class="primary-button icon-text" data-action="open-fill-picker" type="button">${iconUi("check")} Preencher checklist</button>
-        ${currentUser.role !== "agent" ? `<button class="secondary-button icon-text" data-action="open-template-modal" type="button">${iconUi("models")} Criar modelo</button>` : ""}
-      </div>
+      <button class="icon-button" data-action="request-notification" type="button" title="Ativar notificações" aria-label="Ativar notificações">${iconUi("bell")}</button>
     </section>
-    <section class="dashboard-summary-card">
-      <article>
-        <span>Modelos disponíveis</span>
-        <strong>${templates.length}</strong>
-      </article>
-      <article>
-        <span>Checklists preenchidos</span>
-        <strong>${submissions.length}</strong>
-      </article>
-      <article>
-        <span>Tarefas abertas</span>
-        <strong>${tasks.filter((t) => !t.done).length}</strong>
-      </article>
-    </section>
-    <section class="grid cols-2 dashboard-lists" style="margin-top:16px">
-      <article class="card upcoming-card">
-        <h3>Tarefas de hoje</h3>
-        ${renderMiniList(todayTasks.slice(0, 4), renderEmptyState("Sem tarefas para hoje!", "tasks"), (task) => `
-          <div class="list-item compact-task" data-action="open-task-details" data-id="${task.id}">
-            <strong>${escapeHtml(task.title)}</strong>
-            <span class="small">${task.recurrenceHours ? `A cada ${task.recurrenceHours}h` : "Tarefa simples"} · ${formatDateOnly(taskDateKey(task))}</span>
-          </div>
-        `)}
-      </article>
-      <article class="card">
-        <h3>Últimos preenchimentos</h3>
-        ${renderMiniList(submissions.slice(-4).reverse(), "Nenhum preenchimento ainda.", (item) => `
-          <div class="list-item">
-            <strong>${escapeHtml(item.templateTitle)}</strong>
-            <span class="small">${formatDate(item.createdAt)} por ${escapeHtml(userName(item.filledBy))}</span>
-          </div>
-        `)}
-      </article>
+    <section class="today-list">
+      ${renderMiniList(todayTasks, renderEmptyState("Nenhuma tarefa aberta para hoje.", "tasks"), renderTask)}
     </section>
   `;
 }
@@ -571,8 +598,9 @@ function renderTemplateItem(tpl) {
 
 function renderFill() {
   const templates = visibleTemplates();
+  const allowance = dailyFillAllowance();
   return `
-    ${pageHeader("Preencher checklist", "Escolha um modelo disponível e registre evidências, localização e assinaturas.")}
+    ${pageHeader("Preencher checklist", allowance.limit === Infinity ? "Preenchimentos ilimitados." : `${allowance.remaining} de ${allowance.limit} preenchimentos restantes hoje.`)}
     <div class="template-gallery">
       ${templates.map((tpl) => `
         <article class="card template-card ${accentClass(tpl)}">
@@ -581,7 +609,7 @@ function renderFill() {
           <p class="muted">${escapeHtml(tpl.description || "Sem descrição")}</p>
           <div class="toolbar">
             <span class="badge">${tpl.visibility === "public" ? "Público" : "Privado"}</span>
-            <button class="primary-button icon-text" data-action="start-fill" data-id="${tpl.id}" type="button">${iconUi("check")} Preencher</button>
+            <button class="primary-button icon-text" data-action="start-fill" data-id="${tpl.id}" type="button" ${allowance.remaining === 0 ? "disabled" : ""}>${iconUi("check")} Preencher</button>
           </div>
         </article>
       `).join("") || `<div class="empty">Nenhum modelo disponível para você.</div>`}
@@ -595,12 +623,12 @@ function accentClass(tpl) {
 
 function accentColor(tpl = {}) {
   return {
-    blue: "#175cd3",
-    teal: "#008579",
-    violet: "#7950f2",
-    amber: "#b76e00",
-    rose: "#c43c64",
-  }[tpl.accent || "blue"] || "#175cd3";
+    blue: "#111113",
+    teal: "#34363a",
+    violet: "#55575d",
+    amber: "#777a81",
+    rose: "#26272b",
+  }[tpl.accent || "blue"] || "#111113";
 }
 
 function statusLabels(tpl = {}) {
@@ -667,8 +695,15 @@ function iconUi(name) {
     pdf: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l4 4v16H6V2Zm8 1v4h4M8 15h8v2H8v-2Zm0-4h8v2H8v-2Z"/></svg>`,
     eye: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5 0 8 4.5 9 7-1 2.5-4 7-9 7s-8-4.5-9-7c1-2.5 4-7 9-7Zm0 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>`,
     gallery: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4V5Zm2 2v8.6l3.7-3.7 2.8 2.8 2.1-2.1L18 16V7H6Zm9 1.5a1.7 1.7 0 1 1 0 3.4 1.7 1.7 0 0 1 0-3.4Z"/></svg>`,
+    plus: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>`,
+    card: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm0 4h16V7H4v2Zm2 5h6v2H6v-2Z"/></svg>`,
+    chevron: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.4 8.6 4.6 4.6 4.6-4.6L18 10l-6 6-6-6 1.4-1.4Z"/></svg>`,
   };
   return icons[name] || "";
+}
+
+function modalCloseButton(action = "close-modal") {
+  return `<button class="icon-button modal-close" data-action="${action}" type="button" title="Fechar" aria-label="Fechar">${iconUi("close")}</button>`;
 }
 
 function renderReports() {
@@ -698,17 +733,34 @@ function renderReports() {
 
 function renderTasks() {
   const tasks = visibleTasks();
-  const selectedTasks = tasks.filter((task) => taskDateKey(task) === selectedTaskDate);
+  const selectedTasks = tasks
+    .filter((task) => taskDateKey(task) === selectedTaskDate)
+    .sort((a, b) => taskSortValue(a).localeCompare(taskSortValue(b)));
   const openCount = tasks.filter((task) => !task.done).length;
   const doneCount = tasks.filter((task) => task.done).length;
   return `
-    ${pageHeader("Tarefas", "Agenda visual das tarefas e compromissos.", `<button class="icon-button" data-action="request-notification" type="button" title="Ativar notificações" aria-label="Ativar notificações">${iconUi("bell")}</button>`)}
+    ${pageHeader("Tarefas", "Agenda visual das tarefas e compromissos.", `
+      <button class="secondary-button icon-text" data-action="request-notification" type="button">${iconUi("bell")} Notificações</button>
+      <button class="primary-button icon-text" data-action="open-task-modal" type="button">${iconUi("plus")} Nova tarefa</button>
+    `)}
     <section class="task-summary">
       <article><span>Abertas</span><strong>${openCount}</strong></article>
       <article><span>Concluídas</span><strong>${doneCount}</strong></article>
       <article><span>No dia</span><strong>${selectedTasks.length}</strong></article>
     </section>
     ${renderTaskCalendar(tasks)}
+    <section class="task-day card">
+      <div class="section-heading">
+        <div>
+          <span class="template-kicker">Dia selecionado</span>
+          <h3>${formatDateOnly(selectedTaskDate)}</h3>
+        </div>
+        <button class="secondary-button icon-text" data-action="open-task-modal" type="button">${iconUi("plus")} Cadastrar</button>
+      </div>
+      <div class="list">
+        ${selectedTasks.map(renderTask).join("") || renderEmptyState("Sem tarefas neste dia.", "tasks")}
+      </div>
+    </section>
   `;
 }
 
@@ -754,6 +806,7 @@ function renderTaskCalendar(tasks) {
 
 function renderTask(task) {
   const tpl = state.templates.find((item) => item.id === task.templateId);
+  const timeLabel = task.dueTime || task.startHour || "09:00";
   return `
     <article class="list-item task-card ${task.done ? "done" : ""}" data-action="open-task-details" data-id="${task.id}">
       <div class="list-item-head">
@@ -762,8 +815,11 @@ function renderTask(task) {
             <input type="checkbox" data-action="toggle-task" data-id="${task.id}" ${task.done ? "checked" : ""} />
             <strong>${escapeHtml(task.title)}</strong>
           </label>
-          <div class="small">Para ${escapeHtml(userName(task.assignedTo))} · ${task.recurrenceHours ? `a cada ${task.recurrenceHours}h entre ${task.startHour} e ${task.endHour}` : "tarefa simples"}</div>
-          <div class="small">Agenda: ${formatDateOnly(taskDateKey(task))}</div>
+          <div class="small">Para ${escapeHtml(userName(task.assignedTo))} · ${formatTime(timeLabel)} · ${task.recurrenceHours ? `a cada ${task.recurrenceHours}h até ${task.endHour}` : "tarefa simples"}</div>
+          <div class="task-meta-row">
+            <span class="badge">${formatDateOnly(taskDateKey(task))}</span>
+            ${task.notifyEnabled ? `<span class="badge dark">${iconUi("bell")} Lembrete</span>` : ""}
+          </div>
           ${tpl ? `<div class="task-template-chip ${accentClass(tpl)}">${escapeHtml(tpl.title)}</div>` : ""}
           ${task.completedLocation ? `<div class="small">Concluída em ${escapeHtml(task.completedLocation)}</div>` : ""}
         </div>
@@ -778,28 +834,136 @@ function renderTask(task) {
 
 function renderUsers() {
   if (currentUser.role === "adm") {
-    return `
-      ${pageHeader("Acessos", "ADM acompanha todos os usuários e pode criar acessos de empresa.", `<button class="primary-button" data-action="open-company-modal" type="button">Nova empresa</button>`)}
-      <div class="list">${state.users.map(renderUserItem).join("")}</div>
-    `;
+    return renderAdminPanel();
   }
+  const limit = isPaidPlan(planOwner()) ? 5 : 2;
+  const count = agentsForCompany().length;
   return `
-    ${pageHeader("Acessos", "Crie agentes e distribua modelos específicos para cada um.", `<button class="primary-button" data-action="open-agent-modal" type="button">Novo agente</button>`)}
+    ${pageHeader("Acessos", `${Math.min(count, limit)} de ${limit} vagas em uso${count > limit ? ` · ${count - limit} suspensos` : ""}`, `<button class="primary-button" data-action="open-agent-modal" type="button" ${count >= limit ? "disabled" : ""}>Novo colaborador</button>`)}
     <div class="list">${agentsForCompany().map(renderUserItem).join("") || `<div class="empty">Nenhum agente cadastrado.</div>`}</div>
+  `;
+}
+
+function renderAdminPanel() {
+  const companyUsers = state.users.filter((user) => user.role === "company");
+  const agentUsers = state.users.filter((user) => user.role === "agent");
+  const personalUsers = state.users.filter((user) => user.role === "personal");
+  const openTasks = state.tasks.filter((task) => !task.done).length;
+  return `
+    ${pageHeader("ADM", "", `<button class="primary-button icon-text" data-action="open-company-modal" type="button">${iconUi("plus")} Nova empresa</button>`)}
+    <section class="admin-overview">
+      <article><span>Empresas</span><strong>${companyUsers.length}</strong></article>
+      <article><span>Agentes</span><strong>${agentUsers.length}</strong></article>
+      <article><span>Tarefas abertas</span><strong>${openTasks}</strong></article>
+      <article><span>Checklists</span><strong>${state.submissions.length}</strong></article>
+    </section>
+    <section class="admin-sections">
+      ${renderAdminSection("Acessos e contas", `${companyUsers.length} empresas · ${personalUsers.length} individuais · ${agentUsers.length} colaboradores`, `
+        ${[["Empresas", companyUsers], ["Individuais", personalUsers], ["Colaboradores", agentUsers], ["Administradores", state.users.filter((user) => user.role === "adm")]].filter(([, users]) => users.length).map(([label, users]) => `<h3 class="account-group-title">${label}</h3><div class="list">${users.map(renderUserItem).join("")}</div>`).join("")}
+      `, true)}
+      ${renderAdminSection("Cobranças Asaas", "Cartão de crédito e Pix", renderBillingForm())}
+      ${renderAdminSection("Operação", `${openTasks} tarefas abertas`, `
+        <div class="admin-metrics-grid">
+          <article><span>Modelos</span><strong>${state.templates.length}</strong></article>
+          <article><span>Tarefas totais</span><strong>${state.tasks.length}</strong></article>
+          <article><span>Concluídas</span><strong>${state.tasks.filter((task) => task.done).length}</strong></article>
+          <article><span>Relatórios</span><strong>${state.submissions.length}</strong></article>
+        </div>
+      `)}
+      ${renderAdminSection("Sistema", "Aplicativo e serviços", `
+        <div class="system-checklist">
+          <p><strong>Pagamentos</strong><span>Asaas</span></p>
+          <p><strong>Notificações</strong><span>Com aplicativo ativo</span></p>
+          <p><strong>Sincronização</strong><span>Conexão com servidor necessária</span></p>
+        </div>
+      `)}
+    </section>
+  `;
+}
+
+function renderAdminSection(title, subtitle, body, open = false) {
+  return `
+    <details class="admin-section" ${open ? "open" : ""}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(subtitle)}</small>
+        </span>
+        <span class="admin-section-toggle">${iconUi("chevron")}</span>
+      </summary>
+      <div class="admin-section-body">${body}</div>
+    </details>
+  `;
+}
+
+function renderBillingForm() {
+  return `
+    <form class="form billing-form" data-form="asaas-charge">
+      <div class="split">
+        <div class="form-row">
+          <label>Cliente</label>
+          <input name="name" placeholder="Nome ou empresa" required />
+        </div>
+        <div class="form-row">
+          <label>CPF/CNPJ</label>
+          <input name="cpfCnpj" inputmode="numeric" placeholder="Somente números" required />
+        </div>
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label>Email</label>
+          <input name="email" type="email" required />
+        </div>
+        <div class="form-row">
+          <label>Telefone</label>
+          <input name="mobilePhone" inputmode="tel" />
+        </div>
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label>Valor</label>
+          <input name="value" type="number" min="1" step="0.01" placeholder="199.90" required />
+        </div>
+        <div class="form-row">
+          <label>Vencimento</label>
+          <input name="dueDate" type="date" value="${toDateKey(new Date())}" required />
+        </div>
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label>Forma de cobrança</label>
+          <select name="billingType">
+            <option value="CREDIT_CARD">Cartão pela Fatura Asaas</option>
+            <option value="PIX">Pix com QR Code</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Descrição</label>
+          <input name="description" placeholder="Assinatura Checklist Luma" />
+        </div>
+      </div>
+      <button class="primary-button icon-text" type="submit">${iconUi("card")} Gerar cobrança</button>
+    </form>
+    <div class="billing-result" data-billing-result></div>
   `;
 }
 
 function renderUserItem(user) {
   const canDelete = canDeleteUser(user);
+  const owner = user.role === "agent" ? state.users.find((item) => item.companyId === user.companyId && ["company", "adm"].includes(item.role)) : user;
+  const seats = state.users.filter((item) => item.role === "agent" && item.companyId === user.companyId).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id));
+  const suspended = user.role === "agent" && (!owner || owner.role !== "adm" && seats.findIndex((item) => item.id === user.id) >= (isPaidPlan(owner) ? 5 : 2));
+  const planLabel = isPaidPlan(user) ? "Pago ativo" : user.selectedPlan === "paid" ? (user.paidUntil && Date.parse(user.paidUntil) <= Date.now() ? "Vencido" : "Pagamento pendente") : "Gratuito";
   return `
     <article class="list-item">
       <div class="list-item-head">
         <div>
           <h3>${escapeHtml(user.name)}</h3>
           <span class="small">${escapeHtml(user.email)} · ${roleLabel(user.role)}</span>
+          ${currentUser.role === "adm" ? `<div class="admin-user-info"><span>${escapeHtml(user.companyName || "")}</span><span>${escapeHtml(user.phone || "")}</span><span>${escapeHtml(user.document || "")}</span><span>${user.createdAt ? new Date(user.createdAt).toLocaleDateString("pt-BR") : ""}</span><span>${escapeHtml(user.companyId || "")}</span></div>` : ""}
         </div>
         <div class="toolbar">
-          <span class="badge">${user.verified ? "Verificado" : "Pendente"}</span>
+          <span class="badge">${user.role === "agent" ? suspended ? "Acesso suspenso" : "Colaborador ativo" : planLabel}</span>
           ${canDelete ? `<button class="danger-button icon-text" data-action="delete-user" data-id="${user.id}" type="button">${iconUi("trash")} Excluir</button>` : ""}
         </div>
       </div>
@@ -822,39 +986,55 @@ function renderTaskForm() {
   return `
     <form class="form" data-form="task">
       <div class="form-row">
-        <label>Tarefa</label>
-        <input name="title" placeholder="Ex.: Vistoriar loja 2" required />
+        <label for="task-title">Tarefa</label>
+        <input id="task-title" name="title" placeholder="Ex.: Vistoriar loja 2" required />
       </div>
       <div class="split">
         <div class="form-row">
-          <label>Data</label>
-          <input name="dueDate" type="date" value="${selectedTaskDate}" required />
+          <label for="task-date">Data</label>
+          <input id="task-date" name="dueDate" type="date" value="${selectedTaskDate}" required />
         </div>
         <div class="form-row">
-          <label>Atribuir para</label>
-          <select name="assignedTo">${assignOptions}</select>
+          <label for="task-time">Horário</label>
+          <input id="task-time" name="dueTime" type="time" value="09:00" required />
         </div>
-      </div>
-      <div class="form-row">
-        <label>Modelo de checklist vinculado</label>
-        <select name="templateId">${templateOptions}</select>
       </div>
       <div class="split">
         <div class="form-row">
-          <label>Recorrência em horas</label>
-          <input name="recurrenceHours" type="number" min="0" step="1" placeholder="0 para tarefa simples" />
+          <label for="task-assignee">Atribuir para</label>
+          <select id="task-assignee" name="assignedTo">${assignOptions}</select>
+        </div>
+        <label class="toggle-row">
+          <input name="notifyEnabled" type="checkbox" />
+          <span>
+            <strong>Ativar notificação</strong>
+            <small>Lembrar no horário cadastrado enquanto o app estiver ativo.</small>
+          </span>
+        </label>
+      </div>
+      <details class="task-advanced">
+        <summary>Checklist e recorrência</summary>
+        <div class="form-row">
+        <label for="task-template">Modelo de checklist vinculado</label>
+        <select id="task-template" name="templateId">${templateOptions}</select>
+      </div>
+      <div class="split">
+        <div class="form-row">
+          <label for="task-recurrence">Recorrência em horas</label>
+          <input id="task-recurrence" name="recurrenceHours" type="number" min="0" step="1" placeholder="0 para tarefa simples" />
         </div>
         <div class="split">
           <div class="form-row">
-            <label>Início</label>
-            <input name="startHour" type="time" value="08:00" />
+            <label for="task-start">Início</label>
+            <input id="task-start" name="startHour" type="time" value="08:00" />
           </div>
           <div class="form-row">
-            <label>Fim</label>
-            <input name="endHour" type="time" value="18:00" />
+            <label for="task-end">Fim</label>
+            <input id="task-end" name="endHour" type="time" value="18:00" />
           </div>
         </div>
       </div>
+      </details>
       <button class="primary-button icon-text" type="submit">${iconUi("tasks")} Criar tarefa</button>
     </form>
   `;
@@ -868,14 +1048,13 @@ function openTaskModal() {
       <div class="modal-head">
         <div>
           <h2>Criar tarefa</h2>
-          <p class="muted">Defina o dia, o responsável e um checklist vinculado se precisar.</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+        ${modalCloseButton()}
       </div>
       ${renderTaskForm()}
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function openTaskDayModal(dateKey) {
@@ -891,7 +1070,7 @@ function openTaskDayModal(dateKey) {
           <h2>${formatDateOnly(selectedTaskDate)}</h2>
           <p class="muted">${tasks.length ? `${tasks.length} tarefa(s) cadastrada(s)` : "Nenhuma tarefa cadastrada para este dia."}</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+        ${modalCloseButton()}
       </div>
       <div class="list">
         ${tasks.map(renderTask).join("") || renderEmptyState("Sem tarefas neste dia!", "tasks")}
@@ -899,7 +1078,7 @@ function openTaskDayModal(dateKey) {
       <button class="primary-button icon-text" data-action="open-task-modal" type="button">${iconUi("tasks")} Criar tarefa neste dia</button>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function openTaskDetailsModal(id) {
@@ -914,14 +1093,15 @@ function openTaskDetailsModal(id) {
         <div>
           <span class="template-kicker">${task.done ? "Concluída" : "Aberta"}</span>
           <h2>${escapeHtml(task.title)}</h2>
-          <p class="muted">Agenda: ${formatDateOnly(taskDateKey(task))}</p>
+          <p class="muted">Agenda: ${formatDateOnly(taskDateKey(task))} às ${formatTime(task.dueTime || task.startHour || "09:00")}</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button" title="Fechar">×</button>
+        ${modalCloseButton()}
       </div>
       <div class="detail-grid">
         <p><strong>Responsável</strong><span>${escapeHtml(userName(task.assignedTo))}</span></p>
         <p><strong>Tipo</strong><span>${task.recurrenceHours ? `Recorrente a cada ${task.recurrenceHours}h` : "Tarefa simples"}</span></p>
         <p><strong>Janela</strong><span>${task.startHour || "08:00"} até ${task.endHour || "18:00"}</span></p>
+        <p><strong>Notificação</strong><span>${task.notifyEnabled ? `Ativa para ${formatTime(task.dueTime || task.startHour || "09:00")}` : "Desativada"}</span></p>
         <p><strong>Checklist</strong><span>${tpl ? escapeHtml(tpl.title) : "Sem checklist vinculado"}</span></p>
         ${task.completedLocation ? `<p><strong>Local de conclusão</strong><span>${escapeHtml(task.completedLocation)}</span></p>` : ""}
       </div>
@@ -931,7 +1111,7 @@ function openTaskDetailsModal(id) {
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function openTemplateModal(templateId = "") {
@@ -943,9 +1123,8 @@ function openTemplateModal(templateId = "") {
       <div class="topbar">
         <div>
           <h2>${editing ? "Editar modelo" : "Novo modelo"}</h2>
-          <p>${editing ? "Ajuste campos, evidências e distribuição deste modelo." : "Defina campos, evidências e distribuição para agentes."}</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button">×</button>
+        ${modalCloseButton()}
       </div>
       <form class="form" data-form="template" data-template-id="${editing?.id || ""}">
         <div class="split">
@@ -957,7 +1136,7 @@ function openTemplateModal(templateId = "") {
             <label>Visibilidade</label>
             <select name="visibility">
               <option value="private" ${editing?.visibility === "private" ? "selected" : ""}>Privado</option>
-              <option value="public" ${editing?.visibility === "public" ? "selected" : ""}>Público</option>
+              ${isPaidPlan(planOwner()) ? `<option value="public" ${editing?.visibility === "public" ? "selected" : ""}>Público</option>` : ""}
             </select>
           </div>
         </div>
@@ -1054,7 +1233,7 @@ function openTemplateModal(templateId = "") {
       </form>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
   (editing?.headerFields || []).forEach(addHeaderFieldClean);
   if (editing?.fields?.length) editing.fields.forEach(addBuilderField);
   else addBuilderField();
@@ -1203,6 +1382,7 @@ function addHeaderFieldClean(seed = {}) {
 }
 
 function openFillModal(templateId, taskId = "", submissionId = "") {
+  if (!submissionId && dailyFillAllowance().remaining === 0) return alert("Seu limite de preenchimentos de hoje foi atingido.");
   const tpl = state.templates.find((item) => item.id === templateId);
   if (!tpl) return;
   const editing = state.submissions.find((item) => item.id === submissionId);
@@ -1216,6 +1396,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
           <h2>${escapeHtml(tpl.title)}</h2>
           <p>${editing ? "Editando checklist preenchido" : escapeHtml(tpl.description || "Preenchimento de checklist")}</p>
         </div>
+        ${modalCloseButton()}
       </div>
       <form class="form" data-form="submission" data-template-id="${tpl.id}" data-task-id="${taskId}" data-submission-id="${submissionId}">
         ${renderChecklistHeaderFields(tpl)}
@@ -1224,7 +1405,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
       </form>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
   setupSignaturePads();
   if (editing) hydrateSubmissionForm(editing);
 }
@@ -1257,6 +1438,7 @@ function renderChecklistHeaderInput(field) {
 }
 
 function openFillPickerModal() {
+  if (dailyFillAllowance().remaining === 0) return alert("Seu limite de preenchimentos de hoje foi atingido.");
   const templates = visibleTemplates();
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
@@ -1265,23 +1447,21 @@ function openFillPickerModal() {
       <div class="topbar">
         <div>
           <h2>Preencher checklist</h2>
-          <p>Escolha um modelo para iniciar o preenchimento.</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button">×</button>
+        ${modalCloseButton()}
       </div>
-      <div class="template-gallery compact">
+      <div class="checklist-picker">
         ${templates.map((tpl) => `
-          <article class="card template-card ${accentClass(tpl)}">
-            <span class="template-kicker">${escapeHtml(tpl.category || "Operação")}</span>
-            <h3>${escapeHtml(tpl.title)}</h3>
-            <p class="muted">${escapeHtml(tpl.description || "Sem descrição")}</p>
-            <button class="primary-button icon-text" data-action="start-fill" data-id="${tpl.id}" type="button">${iconUi("check")} Preencher</button>
-          </article>
+          <button class="checklist-picker-row" data-action="start-fill" data-id="${tpl.id}" type="button">
+            <span class="picker-symbol">${iconUi("models")}</span>
+            <span class="picker-copy"><strong>${escapeHtml(tpl.title)}</strong><small>${escapeHtml(tpl.category || "Operação")}</small></span>
+            <span class="picker-arrow">${iconUi("chevron")}</span>
+          </button>
         `).join("") || `<div class="empty">Nenhum modelo disponível.</div>`}
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function openChecklistSuccessModal(submissionId) {
@@ -1302,7 +1482,7 @@ function openChecklistSuccessModal(submissionId) {
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 async function shareSubmissionWhatsapp(id) {
@@ -1883,7 +2063,7 @@ function openSignatureModal(fieldId) {
           <span class="template-kicker">Assinatura</span>
           <h2>${escapeHtml(title)}</h2>
         </div>
-        <button class="icon-button" data-action="close-signature-modal" type="button" title="Fechar">×</button>
+        ${modalCloseButton("close-signature-modal")}
       </div>
       <div class="signature-board">
         <canvas class="signature-pad signature-pad-large" data-signature="${fieldId}"></canvas>
@@ -1895,7 +2075,7 @@ function openSignatureModal(fieldId) {
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
   const canvas = modal.querySelector(".signature-pad");
   setupSignaturePad(canvas);
   if (existing) drawSignatureOnCanvas(canvas, existing);
@@ -1921,7 +2101,7 @@ function unlockSignatureOrientation() {
 }
 
 function closeSignatureModal() {
-  document.querySelector(".signature-backdrop")?.remove();
+  dismissModal(document.querySelector(".signature-backdrop"));
   unlockSignatureOrientation();
 }
 
@@ -1962,13 +2142,12 @@ function openUserModal(kind) {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.innerHTML = `
-    <section class="modal">
+    <section class="modal compact-modal">
       <div class="topbar">
         <div>
           <h2>${isCompany ? "Nova empresa" : "Novo agente"}</h2>
-          <p>${isCompany ? "Criado pelo ADM." : "Criado dentro da sua empresa."}</p>
         </div>
-        <button class="icon-button" data-action="close-modal" type="button">×</button>
+        ${modalCloseButton()}
       </div>
       <form class="form" data-form="${isCompany ? "company-user" : "agent-user"}">
         <div class="split">
@@ -1983,7 +2162,7 @@ function openUserModal(kind) {
       </form>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function showReport(id, shouldPrint = false) {
@@ -2000,13 +2179,13 @@ function showReport(id, shouldPrint = false) {
         </div>
         <div class="toolbar">
           <button class="primary-button icon-text" data-action="download-report-pdf" data-id="${report.id}" type="button">${iconUi("pdf")} Baixar PDF</button>
-          <button class="icon-button" data-action="close-modal" type="button">×</button>
+          ${modalCloseButton()}
         </div>
       </div>
       <div id="print-area" class="report-paper">${reportHtml(report)}</div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
   if (shouldPrint) exportSubmissionPdf(report.id);
 }
 
@@ -2258,59 +2437,124 @@ async function handleSubmit(event) {
   event.preventDefault();
   const formType = form.dataset.form;
   const data = new FormData(form);
-  if (formType === "login") submitLogin(data);
-  if (formType === "signup") submitSignup(data);
-  if (formType === "verify") submitVerify(data);
-  if (formType === "template") submitTemplate(form, data);
-  if (formType === "task") submitTask(data);
-  if (formType === "company-user" || formType === "agent-user") submitUser(formType, data);
+  if (formType === "login") await submitLogin(form, data);
+  if (formType === "signup-details") submitSignupDetails(data);
+  if (formType === "plan-payment") await submitPlanPayment(form, data);
+  if (formType === "template") await submitTemplate(form, data);
+  if (formType === "task") await submitTask(data);
+  if (formType === "asaas-charge") await submitAsaasCharge(form, data);
+  if (formType === "company-user" || formType === "agent-user") await submitUser(formType, data);
   if (formType === "submission") await submitChecklist(form, data);
 }
 
-function submitLogin(data) {
-  const login = String(data.get("email")).trim().toLowerCase();
-  const password = String(data.get("password"));
-  const user = state.users.find((item) => item.email.toLowerCase() === login && item.password === password);
-  if (!user) return alert("Email ou senha inválidos.");
-  if (!user.verified) return alert("Verifique seu email antes de entrar.");
-  setSession(user);
-  currentPage = "dashboard";
+async function submitLogin(form, data) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: String(data.get("email") || "").trim(), password: String(data.get("password") || "") }) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Não foi possível entrar.");
+    setSession(body.user);
+    state = await loadState();
+    if (adminSeedsAdded) { adminSeedsAdded = false; await saveState(); }
+    currentPage = "dashboard";
+    render();
+    if (currentUser.selectedPlan === "paid" && !isPaidPlan(currentUser)) checkPlanStatus();
+  } catch (error) { alert(error.message); button.disabled = false; }
+}
+
+function submitSignupDetails(data) {
+  const document = onlyDigits(data.get("document"));
+  const required = signupDraft.kind === "company" ? 14 : 11;
+  if (document && document.length !== required) return alert(`Informe um ${required === 14 ? "CNPJ" : "CPF"} com ${required} dígitos.`);
+  signupDraft = { ...signupDraft, companyName: String(data.get("companyName") || "").trim(), name: String(data.get("name") || "").trim(), email: String(data.get("email") || "").trim().toLowerCase(), phone: String(data.get("phone") || "").trim(), document, password: String(data.get("password") || "") };
+  signupStep = "plan";
   render();
 }
 
-function submitSignup(data) {
-  const email = String(data.get("email")).trim().toLowerCase();
-  if (state.users.some((item) => item.email.toLowerCase() === email)) return alert("Email já cadastrado.");
-  pendingVerification = {
-    code: Math.floor(100000 + Math.random() * 900000).toString(),
-    user: {
-      id: uid(),
-      name: String(data.get("name")).trim(),
-      email,
-      phone: String(data.get("phone")).trim(),
-      password: String(data.get("password")),
-      role: String(data.get("role")),
-      companyId: uid(),
-      verified: false,
-      createdAt: new Date().toISOString(),
-    },
-    email,
-  };
+async function chooseSignupPlan(plan, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...signupDraft, plan }) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Não foi possível criar a conta.");
+    signupDraft = {};
+    setSession(body.user);
+    state = await loadState();
+    currentPage = "dashboard";
+    render();
+    if (plan === "paid") openPlanPaymentModal();
+  } catch (error) { alert(error.message); button.disabled = false; }
+}
+
+function openPlanPaymentModal(result = null) {
+  closeAllModals();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal plan-payment-modal">
+      <div class="topbar"><div><h2>Assinatura ${currentUser.role === "company" ? "Empresa" : "Individual"}</h2><p>${formatMoney(planPrices[currentUser.role])} por mês</p></div>${modalCloseButton()}</div>
+      ${result ? renderPlanPaymentResult(result) : `
+        <form class="form" data-form="plan-payment">
+          ${!currentUser.document ? `<div class="form-row"><label>${currentUser.role === "company" ? "CNPJ" : "CPF"}</label><input name="document" inputmode="numeric" required placeholder="Somente números" /></div>` : ""}
+          <div class="form-row"><label>Forma de pagamento</label><select name="method"><option value="CREDIT_CARD">Cartão de crédito</option><option value="PIX_AUTOMATIC">Pix Automático</option></select></div>
+          <p class="small">A assinatura renova mensalmente. O plano pago libera após a confirmação do pagamento. Você pode cancelar a recorrência em Plano e pagamento.</p>
+          <label class="toggle-row"><input type="checkbox" name="termsAccepted" required /><span>Concordo com a cobrança mensal de ${formatMoney(planPrices[currentUser.role])} e com o processamento do pagamento pelo Asaas. <a href="https://www.asaas.com/politicas-de-seguranca" target="_blank" rel="noopener">Segurança do Asaas</a>.</span></label>
+          <button class="primary-button" type="submit">Continuar para pagamento</button>
+        </form>`}
+    </section>`;
+  mountModal(modal);
+}
+
+function renderPlanPaymentResult(result) {
+  return `<div class="plan-payment-result">
+    <p>${result.status === "active" ? "Pagamento confirmado. Seu plano pago está ativo." : result.status === "pending" ? "Aguardando confirmação do pagamento pelo Asaas." : result.status === "cancelled" ? "A cobrança recorrente foi cancelada." : "O plano pago não está ativo."}</p>
+    ${result.invoiceUrl ? `<a class="primary-button" href="${escapeHtml(result.invoiceUrl)}" target="_blank" rel="noopener">Pagar cartão no Asaas</a>` : ""}
+    ${result.pixImage ? `<img alt="QR Code Pix Automático" src="data:image/png;base64,${escapeHtml(result.pixImage)}" />` : ""}
+    ${result.pixPayload ? `<div class="form-row"><label>Pix copia e cola</label><textarea readonly>${escapeHtml(result.pixPayload)}</textarea></div>` : ""}
+    ${result.status === "pending" ? `<button class="secondary-button" type="button" data-action="check-plan-status">Verificar pagamento</button>` : ""}
+    ${!["active", "pending"].includes(result.status) && !isPaidPlan(currentUser) ? `<button class="primary-button" type="button" data-action="renew-plan">Assinar novamente</button>` : ""}
+    ${result.status === "active" || result.status === "pending" ? `<button class="ghost-button" type="button" data-action="cancel-plan">Cancelar recorrência</button>` : ""}
+  </div>`;
+}
+
+async function submitPlanPayment(form, data) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/plan/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: String(data.get("method")), document: onlyDigits(data.get("document")), termsAccepted: data.get("termsAccepted") === "on" }) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Pagamento indisponível.");
+    currentUser.selectedPlan = "paid";
+    currentUser.billingStatus = "pending";
+    if (data.get("document")) currentUser.document = onlyDigits(data.get("document"));
+    openPlanPaymentModal(body);
+  } catch (error) { alert(error.message); button.disabled = false; }
+}
+
+async function checkPlanStatus() {
+  const response = await fetch("/api/plan/status");
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return alert(body.error || "Não foi possível verificar.");
+  currentUser = body.user;
+  state = await loadState();
+  render();
+  openPlanPaymentModal(body.billing);
+}
+
+async function cancelPlan() {
+  if (!confirm("Cancelar a cobrança recorrente deste plano?")) return;
+  const response = await fetch("/api/plan/cancel", { method: "POST" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return alert(body.error || "Não foi possível cancelar.");
+  const auth = await fetch("/api/auth/me");
+  currentUser = (await auth.json()).user;
+  state = await loadState();
+  closeAllModals();
   render();
 }
 
-function submitVerify(data) {
-  if (String(data.get("code")).trim() !== pendingVerification.code) return alert("Código incorreto.");
-  const user = { ...pendingVerification.user, verified: true };
-  state.users.push(user);
-  saveState();
-  pendingVerification = null;
-  setSession(user);
-  currentPage = "dashboard";
-  render();
-}
-
-function submitTemplate(form, data) {
+async function submitTemplate(form, data) {
   const headerFields = [...form.querySelectorAll(".header-builder-field")].map((node) => ({
     id: uid(),
     label: node.querySelector(".header-field-label").value.trim(),
@@ -2356,13 +2600,15 @@ function submitTemplate(form, data) {
   };
   if (existing) state.templates = state.templates.map((tpl) => (tpl.id === existing.id ? payload : tpl));
   else state.templates.push(payload);
-  saveState();
+  if (!await saveState()) return;
   closeModal();
   render();
 }
 
-function submitTask(data) {
+async function submitTask(data) {
   const dueDate = String(data.get("dueDate") || selectedTaskDate || toDateKey(new Date()));
+  const dueTime = String(data.get("dueTime") || "09:00");
+  const notifyEnabled = data.get("notifyEnabled") === "on";
   state.tasks.push({
     id: uid(),
     title: String(data.get("title")).trim(),
@@ -2371,36 +2617,31 @@ function submitTask(data) {
     ownerId: currentUser.id,
     companyId: currentUser.companyId,
     recurrenceHours: Number(data.get("recurrenceHours") || 0),
-    startHour: String(data.get("startHour") || "08:00"),
+    startHour: String(data.get("startHour") || dueTime || "08:00"),
     endHour: String(data.get("endHour") || "18:00"),
     dueDate,
+    dueTime,
+    notifyEnabled,
     done: false,
     completedLocation: "",
     lastNotifiedAt: null,
+    notificationSentAt: null,
     createdAt: new Date().toISOString(),
   });
   selectedTaskDate = dueDate;
-  saveState();
+  if (!await saveState()) return;
   closeAllModals();
   render();
+  if (notifyEnabled) requestNotification({ quiet: true });
 }
 
-function submitUser(formType, data) {
+async function submitUser(formType, data) {
   const email = String(data.get("email")).trim().toLowerCase();
   if (state.users.some((item) => item.email.toLowerCase() === email)) return alert("Email já cadastrado.");
-  const user = {
-    id: uid(),
-    name: String(data.get("name")).trim(),
-    email,
-    phone: String(data.get("phone")).trim(),
-    password: String(data.get("password")),
-    role: formType === "company-user" ? "company" : "agent",
-    companyId: formType === "company-user" ? uid() : currentUser.companyId,
-    verified: true,
-    createdAt: new Date().toISOString(),
-  };
-  state.users.push(user);
-  saveState();
+  const response = await fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: String(data.get("name") || "").trim(), email, phone: String(data.get("phone") || "").trim(), password: String(data.get("password") || ""), role: formType === "company-user" ? "company" : "agent" }) });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return alert(body.error || "Não foi possível criar o acesso.");
+  state = await loadState();
   closeModal();
   render();
 }
@@ -2447,7 +2688,7 @@ async function submitChecklist(form, data) {
     statusOkIcon: tpl.statusOkIcon || "check",
     statusFailIcon: tpl.statusFailIcon || "close",
     taskId: form.dataset.taskId || "",
-    companyId: tpl.companyId,
+    companyId: currentUser.companyId,
     filledBy: currentUser.id,
     headerValues,
     answers,
@@ -2466,11 +2707,11 @@ async function submitChecklist(form, data) {
       task.completedLocation = firstLocationFromAnswers(answers);
     }
   }
-  const savedLocally = saveState();
+  const savedLocally = await saveState();
+  if (!savedLocally) return;
   closeAllModals();
   render();
   openChecklistSuccessModal(payload.id);
-  if (!savedLocally) alert("O checklist foi finalizado, mas o armazenamento local do navegador está cheio. As fotos foram reduzidas; se estiver usando sem banco de dados, libere espaço antes de criar muitos laudos.");
 }
 
 function firstLocationFromAnswers(answers) {
@@ -2487,15 +2728,25 @@ function handleGlobalClick(event) {
   }
   if (target.dataset.authMode) {
     authMode = target.dataset.authMode;
-    pendingVerification = null;
+    signupStep = "kind";
+    signupDraft = {};
     render();
   }
   const action = target.dataset.action;
   if (!action) return;
   if (action === "logout") {
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setSession(null);
+    state = { users: [], templates: [], submissions: [], tasks: [] };
     render();
   }
+  if (action === "signup-kind") { signupDraft = { kind: target.dataset.kind }; signupStep = "details"; render(); }
+  if (action === "signup-back") { signupStep = signupStep === "plan" ? "details" : "kind"; render(); }
+  if (action === "signup-plan") chooseSignupPlan(target.dataset.plan, target);
+  if (action === "manage-payment") checkPlanStatus();
+  if (action === "check-plan-status") checkPlanStatus();
+  if (action === "renew-plan") openPlanPaymentModal();
+  if (action === "cancel-plan") cancelPlan();
   if (action === "toggle-mobile-menu") toggleMobileMenu();
   if (action === "close-mobile-menu") closeMobileMenu();
   if (action === "install-app") installApp();
@@ -2503,10 +2754,6 @@ function handleGlobalClick(event) {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     localStorage.setItem("luma.theme", next);
     applyTheme();
-  }
-  if (action === "cancel-verification") {
-    pendingVerification = null;
-    render();
   }
   if (action === "open-template-modal") openTemplateModal();
   if (action === "open-task-modal") openTaskModal();
@@ -2531,7 +2778,7 @@ function handleGlobalClick(event) {
   if (action === "save-signature") saveSignature(target.dataset.field);
   if (action === "clear-signature") clearSignature(target.dataset.field);
   if (action === "close-signature-modal") closeSignatureModal();
-  if (action === "close-this-modal") target.closest(".modal-backdrop")?.remove();
+  if (action === "close-this-modal") dismissModal(target.closest(".modal-backdrop"));
   if (action === "capture-location") captureLocation(target.dataset.field);
   if (action === "start-audio") startAudio(target.dataset.field);
   if (action === "stop-audio") stopAudio(target.dataset.field);
@@ -2592,17 +2839,74 @@ function handleInput(event) {
   if (event.target.matches("[data-signature]")) return;
 }
 
+function mountModal(backdrop) {
+  const dialog = backdrop.querySelector(".modal");
+  const title = dialog.querySelector("h2");
+  modalReturnFocus.set(backdrop, document.activeElement);
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.tabIndex = -1;
+  if (title) {
+    title.id ||= `dialog-${uid()}`;
+    dialog.setAttribute("aria-labelledby", title.id);
+  }
+  dialog.querySelectorAll(".form-row > label:not([for])").forEach((label) => {
+    const control = label.nextElementSibling;
+    if (!control?.matches("input, select, textarea")) return;
+    control.id ||= `field-${uid()}`;
+    label.htmlFor = control.id;
+  });
+  document.querySelectorAll(".modal-backdrop").forEach((item) => { item.inert = true; });
+  app.inert = true;
+  document.body.classList.add("has-modal");
+  document.body.appendChild(backdrop);
+  dialog.focus({ preventScroll: true });
+}
+
+function dismissModal(backdrop) {
+  if (!backdrop) return;
+  const returnFocus = modalReturnFocus.get(backdrop);
+  backdrop.remove();
+  const remaining = [...document.querySelectorAll(".modal-backdrop")];
+  const top = remaining.at(-1);
+  if (top) top.inert = false;
+  app.inert = Boolean(top);
+  document.body.classList.toggle("has-modal", Boolean(top));
+  if (returnFocus?.isConnected && !returnFocus.closest("[inert]")) returnFocus.focus({ preventScroll: true });
+  else top?.querySelector(".modal")?.focus({ preventScroll: true });
+}
+
+function handleModalKeydown(event) {
+  const backdrop = [...document.querySelectorAll(".modal-backdrop")].at(-1);
+  if (!backdrop || event.isComposing) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const targets = [...backdrop.querySelectorAll('button:not(:disabled), [href], input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => element.getClientRects().length && !element.closest("[inert]"));
+  const first = targets[0];
+  const last = targets.at(-1);
+  if (!first) { event.preventDefault(); return; }
+  if (!targets.includes(document.activeElement) || event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+}
+
 function closeModal() {
   const modals = document.querySelectorAll(".modal-backdrop");
   if (modals[modals.length - 1]?.classList.contains("signature-backdrop")) unlockSignatureOrientation();
-  modals[modals.length - 1]?.remove();
+  dismissModal(modals[modals.length - 1]);
   mediaRecorder = null;
   chunks = [];
 }
 
 function closeAllModals() {
   if (document.querySelector(".signature-backdrop")) unlockSignatureOrientation();
-  document.querySelectorAll(".modal-backdrop").forEach((modal) => modal.remove());
+  [...document.querySelectorAll(".modal-backdrop")].reverse().forEach(dismissModal);
   mediaRecorder = null;
   chunks = [];
 }
@@ -2617,7 +2921,7 @@ function openPhotoPicker(fieldId) {
           <h2>Adicionar foto</h2>
           <p>Use a câmera agora ou escolha imagens da galeria.</p>
         </div>
-        <button class="icon-button" data-action="close-this-modal" type="button">×</button>
+        ${modalCloseButton("close-this-modal")}
       </div>
       <div class="photo-source-actions">
         <button class="primary-button icon-text" data-action="photo-camera" data-field="${fieldId}" type="button">${iconCamera()} Tirar foto</button>
@@ -2625,12 +2929,12 @@ function openPhotoPicker(fieldId) {
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function triggerPhotoInput(fieldId, source) {
+  dismissModal(document.querySelector(".photo-source-backdrop"));
   document.querySelector(`[data-photo-input="${fieldId}"][data-photo-source="${source}"]`)?.click();
-  document.querySelector(".photo-source-backdrop")?.remove();
 }
 
 async function addPhotosFromInput(input) {
@@ -2681,12 +2985,12 @@ function openPhotoPreview(fieldId, index) {
         <div>
           <h2>Foto ${index + 1}</h2>
         </div>
-        <button class="icon-button" data-action="close-this-modal" type="button">×</button>
+        ${modalCloseButton("close-this-modal")}
       </div>
       <img src="${src}" alt="Foto ${index + 1}" />
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function openObservationModal(fieldId) {
@@ -2695,21 +2999,21 @@ function openObservationModal(fieldId) {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop evidence-backdrop";
   modal.innerHTML = `
-    <section class="modal evidence-modal">
+    <section class="modal compact-modal evidence-modal">
       <div class="topbar">
         <div>
           <h2>Observações</h2>
           <p>${escapeHtml(title)}</p>
         </div>
-        <button class="icon-button" data-action="close-this-modal" type="button">×</button>
+        ${modalCloseButton("close-this-modal")}
       </div>
-      <textarea data-observation-editor="${fieldId}" placeholder="Escreva a observação aqui...">${escapeHtml(input?.value || "")}</textarea>
+      <textarea aria-label="Observação" data-observation-editor="${fieldId}" placeholder="Escreva a observação aqui...">${escapeHtml(input?.value || "")}</textarea>
       <div class="toolbar">
         <button class="primary-button" data-action="save-observation" data-field="${fieldId}" type="button">Salvar observação</button>
       </div>
     </section>
   `;
-  document.body.appendChild(modal);
+  mountModal(modal);
 }
 
 function saveObservation(fieldId) {
@@ -2720,7 +3024,7 @@ function saveObservation(fieldId) {
   input.value = editor.value.trim();
   preview.textContent = input.value;
   preview.classList.toggle("hidden", !input.value);
-  editor.closest(".modal-backdrop")?.remove();
+  dismissModal(editor.closest(".modal-backdrop"));
 }
 
 function safeJson(value, fallback) {
@@ -2762,29 +3066,82 @@ function deleteSubmission(id) {
   render();
 }
 
-function deleteUser(id) {
+async function deleteUser(id) {
   const user = state.users.find((item) => item.id === id);
   if (!canDeleteUser(user)) return;
   if (!confirm(`Excluir somente o acesso de ${user.name}? Modelos, checklists e tarefas serão preservados.`)) return;
-
-  state.users = state.users.filter((item) => item.id !== user.id);
-  state.templates = state.templates.map((tpl) => ({
-    ...tpl,
-    ownerId: tpl.ownerId === user.id ? "" : tpl.ownerId,
-    assignedAgentIds: (tpl.assignedAgentIds || []).filter((agentId) => agentId !== user.id),
-  }));
-  state.submissions = state.submissions.map((item) => ({
-    ...item,
-    filledBy: item.filledBy === user.id ? "" : item.filledBy,
-  }));
-  state.tasks = state.tasks.map((task) => ({
-    ...task,
-    ownerId: task.ownerId === user.id ? "" : task.ownerId,
-    assignedTo: task.assignedTo === user.id ? "" : task.assignedTo,
-  }));
-
-  saveState();
+  const response = await fetch(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return alert(body.error || "Não foi possível excluir o acesso.");
+  state = await loadState();
   render();
+}
+
+async function submitAsaasCharge(form, data) {
+  const result = form.parentElement.querySelector("[data-billing-result]");
+  const button = form.querySelector('button[type="submit"]');
+  if (result) result.innerHTML = `<div class="empty">Gerando cobrança...</div>`;
+  if (button) button.disabled = true;
+  try {
+    const payload = {
+      customer: {
+        name: String(data.get("name") || "").trim(),
+        cpfCnpj: onlyDigits(data.get("cpfCnpj")),
+        email: String(data.get("email") || "").trim(),
+        mobilePhone: onlyDigits(data.get("mobilePhone")),
+      },
+      payment: {
+        billingType: String(data.get("billingType") || "CREDIT_CARD"),
+        value: Number(data.get("value") || 0),
+        dueDate: String(data.get("dueDate") || toDateKey(new Date())),
+        description: String(data.get("description") || "Assinatura Checklist Luma").trim() || "Assinatura Checklist Luma",
+        externalReference: `luma-${Date.now()}`,
+      },
+    };
+    const response = await fetch("/api/asaas/charges", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Não foi possível gerar a cobrança.");
+    if (result) result.innerHTML = renderBillingResult(body);
+    form.reset();
+    form.querySelector('[name="dueDate"]').value = toDateKey(new Date());
+  } catch (error) {
+    if (result) result.innerHTML = `<div class="empty danger-empty">${escapeHtml(error.message)}</div>`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function renderBillingResult(body) {
+  const payment = body.payment || {};
+  const pix = body.pixQrCode || null;
+  return `
+    <article class="billing-success">
+      <div>
+        <span class="template-kicker">Cobrança criada</span>
+        <h3>${escapeHtml(payment.billingType || "Asaas")} · ${escapeHtml(payment.status || "pendente")}</h3>
+        <p class="muted">ID ${escapeHtml(payment.id || "")}</p>
+      </div>
+      <div class="billing-links">
+        ${payment.invoiceUrl ? `<a class="primary-button" href="${escapeHtml(payment.invoiceUrl)}" target="_blank" rel="noopener">Abrir fatura</a>` : ""}
+        ${payment.bankSlipUrl ? `<a class="secondary-button" href="${escapeHtml(payment.bankSlipUrl)}" target="_blank" rel="noopener">Abrir boleto</a>` : ""}
+      </div>
+      ${pix ? `
+        <div class="pix-box">
+          ${pix.encodedImage ? `<img src="data:image/png;base64,${pix.encodedImage}" alt="QR Code Pix" />` : ""}
+          <label>Pix copia e cola</label>
+          <textarea readonly>${escapeHtml(pix.payload || "")}</textarea>
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
+function onlyDigits(value) {
+  return String(value || "").replace(/\D+/g, "");
 }
 
 function duplicateTemplate(id) {
@@ -3040,10 +3397,10 @@ function compressImageSource(src, options = {}, revoke = false) {
   });
 }
 
-function requestNotification() {
+function requestNotification(options = {}) {
   if (!("Notification" in window)) return alert("Notificações não disponíveis.");
   Notification.requestPermission().then((permission) => {
-    alert(permission === "granted" ? "Notificações ativadas." : "Permissão não concedida.");
+    if (!options.quiet) alert(permission === "granted" ? "Notificações ativadas." : "Permissão não concedida.");
   });
 }
 
@@ -3053,20 +3410,40 @@ function startTaskTicker() {
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     visibleTasks().forEach((task) => {
-      if (task.done || !task.recurrenceHours) return;
-      const [startH, startM] = task.startHour.split(":").map(Number);
-      const [endH, endM] = task.endHour.split(":").map(Number);
+      if (task.done) return;
+      const todayKey = toDateKey(now);
+      if (task.notifyEnabled && taskDateKey(task) === todayKey && !task.notificationSentAt) {
+        const [dueH, dueM] = String(task.dueTime || task.startHour || "09:00").split(":").map(Number);
+        const dueMinutes = dueH * 60 + dueM;
+        if (currentMinutes >= dueMinutes) {
+          showTaskNotification(task);
+          task.notificationSentAt = now.toISOString();
+          task.lastNotifiedAt = now.toISOString();
+          saveState();
+          return;
+        }
+      }
+      if (!task.recurrenceHours) return;
+      const [startH, startM] = String(task.startHour || task.dueTime || "08:00").split(":").map(Number);
+      const [endH, endM] = String(task.endHour || "18:00").split(":").map(Number);
       const start = startH * 60 + startM;
       const end = endH * 60 + endM;
       if (currentMinutes < start || currentMinutes > end) return;
       const last = task.lastNotifiedAt ? new Date(task.lastNotifiedAt) : new Date(task.createdAt);
       const due = now - last >= task.recurrenceHours * 60 * 60 * 1000;
       if (!due) return;
-      new Notification("Check list profissional", { body: task.title });
+      showTaskNotification(task);
       task.lastNotifiedAt = now.toISOString();
       saveState();
     });
   }, 60000);
+}
+
+function showTaskNotification(task) {
+  new Notification("Checklist Luma", {
+    body: `${task.title}${task.dueTime ? ` · ${formatTime(task.dueTime)}` : ""}`,
+    tag: `task-${task.id}`,
+  });
 }
 
 function userName(id) {
@@ -3075,6 +3452,10 @@ function userName(id) {
 
 function taskDateKey(task) {
   return task.dueDate || toDateKey(task.createdAt || new Date());
+}
+
+function taskSortValue(task) {
+  return `${task.dueTime || task.startHour || "99:99"}-${task.createdAt || ""}`;
 }
 
 function toDateKey(value) {
@@ -3101,6 +3482,11 @@ function shiftTaskMonth(offset) {
 
 function formatDateOnly(key) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(dateFromKey(key));
+}
+
+function formatTime(value) {
+  const [hour = "00", minute = "00"] = String(value || "00:00").split(":");
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function formatDate(value) {

@@ -6,10 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "test": "node --test plan-flow.test.mjs production.test.mjs",
     "icons": "node scripts/generate-icons.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "dependencies": {
     "express": "^4.19.2",
