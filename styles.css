@@ -152,6 +152,74 @@ button {
   gap: 8px;
 }
 
+.model-section,
+.profile-grid {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-heading h3 { margin: 0; }
+.section-heading span { color: var(--muted); font-size: 13px; }
+.community-search { display: grid; gap: 6px; max-width: 460px; color: var(--muted); font-size: 13px; }
+.profile-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+.profile-grid .card { padding: 22px; }
+.profile-cancel { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+
+.layout-elements { display: grid; gap: 8px; margin-top: 10px; }
+.layout-element { border: 1px solid var(--line); padding: 10px; border-radius: 8px; background: var(--surface-soft); }
+.layout-position { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.layout-position label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.layout-position input { width: 100%; min-width: 0; }
+.layout-preview-wrap { display: grid; gap: 8px; margin-top: 14px; }
+.a4-preview { position: relative; width: min(100%, 520px); aspect-ratio: 210 / 297; overflow: hidden; background: #fff; color: #16181d; border: 1px solid #bcc2cd; box-shadow: 0 10px 24px rgba(0,0,0,.12); }
+.a4-preview-head { position: absolute; top: 4%; left: 7%; right: 7%; border-bottom: 2px solid #1a1d24; padding-bottom: 1.3%; font-weight: 800; font-size: clamp(12px, 2.4vw, 20px); }
+.a4-preview-footer { position: absolute; bottom: 3%; left: 7%; right: 7%; color: #5e6470; border-top: 1px solid #cfd3da; padding-top: 1.4%; font-size: clamp(7px, 1.4vw, 10px); }
+.layout-shape { position: absolute; overflow: hidden; font-size: clamp(7px, 1.5vw, 12px); line-height: 1.15; }
+.layout-title { font-size: clamp(11px, 2.2vw, 18px); font-weight: 800; }
+.layout-line { border-bottom: 1px solid currentColor; }
+.layout-box, .layout-blank { border: 1px solid currentColor; padding: 2px; }
+.layout-circle { border: 1px solid currentColor; border-radius: 999px; }
+.layout-blank input { width: 100%; height: 100%; border: 0; outline: 0; background: transparent; font: inherit; padding: 2px; }
+.runtime-layout { margin: 6px 0 18px; }
+.runtime-layout .a4-preview { width: 100%; max-width: 620px; }
+.report-layout-preview { width: 100%; max-width: none; box-shadow: none; }
+.free-runtime-field { display: grid; gap: 8px; }
+
+.background-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin-top: 10px; }
+.background-card { position: relative; display: grid; gap: 5px; padding: 9px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; overflow: hidden; }
+.background-card:has(input:checked) { outline: 2px solid var(--primary); outline-offset: 1px; }
+.background-card input { position: absolute; opacity: 0; }
+.background-card small { color: var(--muted); font-size: 11px; }
+.background-swatch { height: 68px; border: 1px solid rgba(30,35,45,.12); border-radius: 6px; padding: 12px 10px; display: grid; gap: 7px; }
+.background-swatch i { display: block; height: 4px; width: 85%; background: rgba(30,35,45,.4); border-radius: 99px; }
+.background-blueprint .background-swatch, .pdf-background-blueprint { background-color: #e5eff9; background-image: linear-gradient(rgba(77,120,166,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(77,120,166,.12) 1px, transparent 1px); background-size: 18px 18px; }
+.background-blush .background-swatch, .pdf-background-blush { background: #fae8ec; }
+.background-mint .background-swatch, .pdf-background-mint { background: #e4f3ed; }
+.background-sand .background-swatch, .pdf-background-sand { background: #f8efdf; }
+.background-lavender .background-swatch, .pdf-background-lavender { background: #eee9fa; }
+.background-clean .background-swatch, .pdf-background-clean { background: #fff; }
+.checklist-modal.pdf-background-blueprint, .checklist-modal.pdf-background-blush, .checklist-modal.pdf-background-mint, .checklist-modal.pdf-background-sand, .checklist-modal.pdf-background-lavender { background-image: inherit; }
+.image-builder-config { display: grid; gap: 10px; margin-top: 12px; }
+.image-builder-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.marker-builder-canvas, .marker-runtime-canvas { position: relative; width: min(100%, 650px); overflow: hidden; border: 1px dashed var(--line); border-radius: 10px; background: var(--surface-soft); }
+.marker-builder-canvas img, .marker-runtime-canvas img { display: block; width: 100%; height: auto; }
+.marker-placeholder { display: grid; place-items: center; min-height: 200px; color: var(--muted); padding: 24px; text-align: center; }
+.image-marker { position: absolute; z-index: 2; width: 26px; height: 26px; border: 2px solid #17191d; border-radius: 50%; padding: 4px; background: rgba(255,255,255,.74); transform: translate(-50%, -50%); touch-action: none; }
+.image-marker span { display:block; width:100%; height:100%; border-radius:50%; background:transparent; }
+.image-marker.marked span { background:#17191d; }
+.image-marker:not([data-action=""]) { cursor: grab; }
+.image-runtime-field { display: grid; gap: 12px; }
+.image-runtime-head h3 { margin: 0; }
+.report-marker-canvas { width: min(100%, 520px); }
+.report-marked-image { margin: 12px 0; }
+
 .nav button,
 .ghost-button,
 .primary-button,

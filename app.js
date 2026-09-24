@@ -26,7 +26,7 @@ let selectedTaskDate = toDateKey(new Date());
 let authMode = "login";
 let signupStep = "kind";
 let signupDraft = {};
-let planPrices = { personal: 9.90, company: 15.90 };
+let planPrices = { personal: 9.90, company: 34.90, companyExtraCollaborator: 4.90 };
 let saveQueue = Promise.resolve();
 let stateEpoch = 0;
 let adminSeedsAdded = false;
@@ -56,7 +56,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(STORE_KEY);
   const planResponse = await fetch("/api/plans").catch(() => null);
-  if (planResponse?.ok) planPrices = (await planResponse.json()).prices || planPrices;
+  if (planResponse?.ok) planPrices = { ...planPrices, ...((await planResponse.json()).prices || {}) };
   const authResponse = await fetch("/api/auth/me").catch(() => null);
   currentUser = authResponse?.ok ? (await authResponse.json()).user : null;
   state = await loadState();
@@ -177,6 +177,8 @@ function migrateState(nextState) {
     tpl.statusOkIcon ||= "check";
     tpl.statusFailIcon ||= "close";
     tpl.headerFields ||= [];
+    tpl.layout ||= [];
+    tpl.backgroundStyle ||= "clean";
     tpl.fields = (tpl.fields || []).map(normalizeTemplateField);
   });
   nextState.tasks.forEach((task) => {
@@ -325,7 +327,7 @@ function planOwner() {
 }
 
 function isPaidPlan(user) {
-  return user?.role === "adm" || user?.plan === "paid" && user?.billingStatus === "active" && (!user?.paidUntil || Date.parse(user.paidUntil) > Date.now());
+  return user?.role === "adm" || user?.plan === "paid" && (user?.billingStatus === "admin_granted" || user?.billingStatus === "active" && (!user?.paidUntil || Date.parse(user.paidUntil) > Date.now()));
 }
 
 function dailyFillAllowance() {
@@ -349,6 +351,7 @@ function render() {
     reports: renderReports,
     tasks: renderTasks,
     users: renderUsers,
+    profile: renderProfile,
   };
   const content = (pageMap[currentPage] || renderDashboard)();
   const navigation = `
@@ -358,7 +361,9 @@ function render() {
       ${currentUser.role !== "agent" ? navButton("templates", "Modelos", "models") : ""}
       ${navButton("fill", "Preencher", "check")}
       ${navButton("reports", "Checklists preenchidos", "filled")}
-      ${["adm", "company"].includes(currentUser.role) ? navButton("users", currentUser.role === "adm" ? "ADM" : "Acessos", "users") : ""}
+      ${currentUser.role === "company" ? navButton("users", "Colaboradores", "users") : ""}
+      ${currentUser.role === "adm" ? navButton("users", "Administração", "users") : ""}
+      ${navButton("profile", "Meu perfil", "users")}
     </nav>
   `;
   const quickActions = currentPage === "users" ? "" : `
@@ -395,7 +400,6 @@ function render() {
             <div class="small">${escapeHtml(currentUser.email)}</div>
           </div>
           <button class="secondary-button theme-button" data-action="toggle-theme" type="button">${iconUi("theme")} Alternar tema</button>
-          ${["company", "personal"].includes(currentUser.role) ? `<button class="secondary-button" data-action="manage-payment" type="button">Plano e pagamento</button>` : ""}
           <button class="danger-button logout-button" data-action="logout" type="button">${iconUi("logout")} Sair</button>
         </div>
       </aside>
@@ -512,13 +516,13 @@ function renderSignupPlans() {
   const company = signupDraft.kind === "company";
   const limit = company ? 2 : 3;
   const seats = company ? "Até 2 colaboradores" : "Acesso individual";
-  const paidSeats = company ? "Até 5 colaboradores" : "Acesso individual";
+  const paidSeats = company ? "Acesso da empresa + 2 colaboradores" : "Acesso individual";
   const price = planPrices[company ? "company" : "personal"];
   return `
     <div class="signup-stage"><span>3 de 3</span><h2>Escolha seu plano</h2><p>${escapeHtml(signupDraft.email || "")}</p></div>
     <div class="plan-options">
       <article class="plan-option"><span>Gratuito</span><h3>R$ 0</h3><p>${limit} preenchimentos por dia, por acesso</p><p>Checklists próprios e tarefas com notificações</p><p>${seats}</p><button class="secondary-button" type="button" data-action="signup-plan" data-plan="free">Começar grátis</button></article>
-      <article class="plan-option"><span>Pago</span><h3>${formatMoney(price)} <small>/ mês</small></h3><p>Preenchimentos ilimitados</p><p>Checklists próprios e da comunidade</p><p>Tarefas com notificações e ${paidSeats.toLowerCase()}</p><button class="primary-button" type="button" data-action="signup-plan" data-plan="paid">Assinar</button></article>
+      <article class="plan-option"><span>Pago</span><h3>${formatMoney(price)} <small>/ mês</small></h3><p>Preenchimentos ilimitados</p><p>Checklists próprios e da comunidade</p><p>Tarefas com notificações e ${paidSeats.toLowerCase()}</p>${company ? `<p class="small">Cada colaborador adicional: ${formatMoney(planPrices.companyExtraCollaborator)}/mês.</p>` : ""}<button class="primary-button" type="button" data-action="signup-plan" data-plan="paid">Assinar</button></article>
     </div><button class="ghost-button" type="button" data-action="signup-back">Voltar</button>
   `;
 }
@@ -566,11 +570,12 @@ function renderEmptyState(message, icon = "tasks") {
 
 function renderTemplates() {
   const canCreate = currentUser.role !== "agent";
+  const privateTemplates = ownTemplates().filter((tpl) => tpl.visibility !== "public");
+  const communityTemplates = visibleTemplates().filter((tpl) => tpl.visibility === "public");
   return `
-    ${pageHeader("Modelos", "Crie modelos públicos ou privados e defina quais evidências cada campo precisa.", canCreate ? `<button class="primary-button icon-text" data-action="open-template-modal" type="button">${iconUi("models")} Novo modelo</button>` : "")}
-    <div class="list">
-      ${ownTemplates().map(renderTemplateItem).join("") || `<div class="empty">Nenhum modelo criado ainda.</div>`}
-    </div>
+    ${pageHeader("Modelos", "Crie, teste e publique modelos com prévia real de preenchimento e PDF.", canCreate ? `<button class="primary-button icon-text" data-action="open-template-modal" type="button">${iconUi("models")} Novo modelo</button>` : "")}
+    <section class="model-section"><div class="section-heading"><h3>Meus modelos privados</h3><span>${privateTemplates.length}</span></div><div class="list">${privateTemplates.map(renderTemplateItem).join("") || `<div class="empty">Nenhum modelo privado criado ainda.</div>`}</div></section>
+    <section class="model-section"><div class="section-heading"><h3>Modelos da comunidade</h3><span>${communityTemplates.length}</span></div><label class="community-search"><span>Pesquisar por tema</span><input type="search" data-community-search placeholder="Ex.: veículo, estoque, viagem" /></label><div class="list" data-community-list>${communityTemplates.map(renderTemplateItem).join("") || `<div class="empty">Nenhum modelo da comunidade disponível neste plano.</div>`}</div></section>
   `;
 }
 
@@ -619,6 +624,10 @@ function renderFill() {
 
 function accentClass(tpl) {
   return `accent-${tpl.accent || "blue"}`;
+}
+
+function backgroundClass(item = {}) {
+  return `pdf-background-${item.backgroundStyle || item.templateBackground || "clean"}`;
 }
 
 function accentColor(tpl = {}) {
@@ -836,11 +845,26 @@ function renderUsers() {
   if (currentUser.role === "adm") {
     return renderAdminPanel();
   }
-  const limit = isPaidPlan(planOwner()) ? 5 : 2;
+  const paid = isPaidPlan(planOwner());
+  const limit = paid ? Infinity : 2;
   const count = agentsForCompany().length;
   return `
-    ${pageHeader("Acessos", `${Math.min(count, limit)} de ${limit} vagas em uso${count > limit ? ` · ${count - limit} suspensos` : ""}`, `<button class="primary-button" data-action="open-agent-modal" type="button" ${count >= limit ? "disabled" : ""}>Novo colaborador</button>`)}
+    ${pageHeader("Colaboradores", paid ? `${count} colaborador(es). O plano inclui 2; cada adicional custa ${formatMoney(planPrices.companyExtraCollaborator)}/mês.` : `${Math.min(count, limit)} de ${limit} vagas gratuitas em uso`, `<button class="primary-button" data-action="open-agent-modal" type="button" ${count >= limit ? "disabled" : ""}>Novo colaborador</button>`)}
     <div class="list">${agentsForCompany().map(renderUserItem).join("") || `<div class="empty">Nenhum agente cadastrado.</div>`}</div>
+  `;
+}
+
+function renderProfile() {
+  const owner = planOwner();
+  const canManagePlan = ["company", "personal"].includes(currentUser.role);
+  const planText = isPaidPlan(owner) ? (owner.billingStatus === "admin_granted" ? "Pago liberado pelo administrador" : "Plano pago ativo") : "Plano gratuito";
+  return `
+    ${pageHeader("Meu perfil", "Informações da conta, segurança e assinatura.")}
+    <section class="profile-grid">
+      <article class="card"><span class="template-kicker">Conta</span><h3>${escapeHtml(currentUser.name)}</h3><p class="muted">${escapeHtml(currentUser.email)}</p><div class="detail-grid"><p><strong>Tipo de acesso</strong><span>${roleLabel(currentUser.role)}</span></p><p><strong>Telefone</strong><span>${escapeHtml(currentUser.phone || "Não informado")}</span></p><p><strong>Plano</strong><span>${planText}</span></p>${currentUser.companyName ? `<p><strong>Empresa</strong><span>${escapeHtml(currentUser.companyName)}</span></p>` : ""}</div></article>
+      <article class="card"><span class="template-kicker">Segurança</span><h3>Trocar senha</h3><form class="form" data-form="change-password"><div class="form-row"><label>Senha atual</label><input name="currentPassword" type="password" autocomplete="current-password" required /></div><div class="form-row"><label>Nova senha</label><input name="nextPassword" type="password" autocomplete="new-password" minlength="8" required /></div><button class="secondary-button" type="submit">Atualizar senha</button></form></article>
+      ${canManagePlan ? `<article class="card profile-cancel"><span class="template-kicker">Assinatura</span><h3>Plano e cancelamento</h3><p class="muted">${isPaidPlan(owner) ? "Ao cancelar, seu acesso volta para o plano gratuito e a cobrança recorrente é encerrada no Asaas." : "Você está no plano gratuito. Pode assinar quando quiser."}</p><div class="toolbar">${!isPaidPlan(owner) ? `<button class="primary-button" data-action="renew-plan" type="button">Assinar plano pago</button>` : ""}${isPaidPlan(owner) && owner.billingStatus !== "admin_granted" ? `<button class="danger-button" data-action="open-cancel-plan-modal" type="button">Cancelar meu plano</button>` : ""}</div></article>` : `<article class="card"><span class="template-kicker">Plano</span><h3>${planText}</h3><p class="muted">Este acesso é administrado pelo titular da empresa.</p></article>`}
+    </section>
   `;
 }
 
@@ -952,7 +976,7 @@ function renderUserItem(user) {
   const canDelete = canDeleteUser(user);
   const owner = user.role === "agent" ? state.users.find((item) => item.companyId === user.companyId && ["company", "adm"].includes(item.role)) : user;
   const seats = state.users.filter((item) => item.role === "agent" && item.companyId === user.companyId).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id));
-  const suspended = user.role === "agent" && (!owner || owner.role !== "adm" && seats.findIndex((item) => item.id === user.id) >= (isPaidPlan(owner) ? 5 : 2));
+  const suspended = user.role === "agent" && (!owner || owner.role !== "adm" && !isPaidPlan(owner) && seats.findIndex((item) => item.id === user.id) >= 2);
   const planLabel = isPaidPlan(user) ? "Pago ativo" : user.selectedPlan === "paid" ? (user.paidUntil && Date.parse(user.paidUntil) <= Date.now() ? "Vencido" : "Pagamento pendente") : "Gratuito";
   return `
     <article class="list-item">
@@ -964,6 +988,7 @@ function renderUserItem(user) {
         </div>
         <div class="toolbar">
           <span class="badge">${user.role === "agent" ? suspended ? "Acesso suspenso" : "Colaborador ativo" : planLabel}</span>
+          ${currentUser.role === "adm" && ["personal", "company"].includes(user.role) ? `<button class="secondary-button" data-action="admin-set-plan" data-id="${user.id}" data-plan="${isPaidPlan(user) ? "free" : "paid"}" type="button">${isPaidPlan(user) ? "Definir grátis" : "Liberar pago"}</button>` : ""}
           ${canDelete ? `<button class="danger-button icon-text" data-action="delete-user" data-id="${user.id}" type="button">${iconUi("trash")} Excluir</button>` : ""}
         </div>
       </div>
@@ -1211,6 +1236,11 @@ function openTemplateModal(templateId = "") {
           <textarea name="description">${escapeHtml(editing?.description || "")}</textarea>
         </div>
         <div class="form-row">
+          <label>Fundo do checklist em PDF</label>
+          <span class="small">Escolha um modelo pronto. Os campos que você criar ficam organizados sobre este estilo, sem precisar montar o PDF manualmente.</span>
+          ${renderBackgroundPicker(editing?.backgroundStyle || "clean")}
+        </div>
+        <div class="form-row">
           <label>CabeÃ§alho do preenchimento</label>
           <span class="small">Campos que aparecem antes dos itens, como cliente, OS, equipamento ou endereÃ§o.</span>
           <div id="builder-header-fields" class="grid builder-header-grid"></div>
@@ -1237,10 +1267,16 @@ function openTemplateModal(templateId = "") {
   (editing?.headerFields || []).forEach(addHeaderFieldClean);
   if (editing?.fields?.length) editing.fields.forEach(addBuilderField);
   else addBuilderField();
+  document.querySelectorAll(".image-builder-field").forEach(setupImageMarkerBuilder);
 }
 
 function renderSelectedOptions(options, selectedValue) {
   return options.map(([value, label]) => `<option value="${value}" ${value === selectedValue ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function renderBackgroundPicker(selected) {
+  const themes = [["clean", "Clássico", "Fundo branco, linhas discretas"], ["blueprint", "Azul suave", "Azul pastel técnico"], ["blush", "Rosa pastel", "Leve e acolhedor"], ["mint", "Verde menta", "Organizado e fresco"], ["sand", "Areia", "Elegante e quente"], ["lavender", "Lavanda", "Criativo e suave"]];
+  return `<div class="background-picker">${themes.map(([id, name, description]) => `<label class="background-card background-${id}"><input type="radio" name="backgroundStyle" value="${id}" ${id === selected ? "checked" : ""} /><span class="background-swatch"><i></i><i></i><i></i></span><strong>${name}</strong><small>${description}</small></label>`).join("")}</div>`;
 }
 
 function statusIconOptions(kind) {
@@ -1263,11 +1299,121 @@ function addBuilderField(seed) {
     });
   }
   applyBuilderKindDefaults(node, !field);
+  if (field?.kind === "image") renderImageBuilderConfig(node, field);
   holder.appendChild(node);
+  if (field?.kind === "image") setupImageMarkerBuilder(node);
+}
+
+function renderImageBuilderConfig(node, field = {}) {
+  node.classList.add("image-builder-field");
+  const config = node.querySelector(".image-builder-config") || document.createElement("div");
+  config.className = "image-builder-config";
+  config.dataset.imageSrc = field.imageSrc || "";
+  config.innerHTML = `<div class="image-builder-actions"><label class="secondary-button">Escolher imagem<input class="template-image-upload" type="file" accept="image/*" hidden /></label><button class="secondary-button" data-action="add-image-marker" type="button">Adicionar bolinha</button><span class="small">Adicione uma bolinha e arraste-a até a área que deseja avaliar.</span></div><div class="marker-builder-canvas ${field.imageSrc ? "has-image" : ""}" data-marker-canvas>${field.imageSrc ? `<img src="${field.imageSrc}" alt="Imagem do modelo" />` : `<div class="marker-placeholder">Escolha uma imagem, como o desenho de um veículo.</div>`}${renderImageMarkers(field.imageMarkers || [], "builder")}</div><div class="small" data-marker-count>${(field.imageMarkers || []).length} marcações configuradas</div>`;
+  if (!config.parentElement) node.appendChild(config);
+}
+
+function renderImageMarkers(markers = [], mode = "builder", fieldId = "") {
+  return markers.map((marker) => `<button class="image-marker ${mode === "runtime" && marker.marked ? "marked" : ""}" style="left:${marker.x}%;top:${marker.y}%;" data-action="${mode === "runtime" ? "toggle-image-marker" : ""}" data-field="${fieldId}" data-marker="${marker.id}" type="button" aria-label="Marcação ${escapeHtml(marker.label || "")}"><span></span></button>`).join("");
+}
+
+function getImageMarkers(node) {
+  return [...node.querySelectorAll(".image-marker")].map((marker) => ({ id: marker.dataset.marker || uid(), x: Number(marker.style.left.replace("%", "")) || 50, y: Number(marker.style.top.replace("%", "")) || 50, label: marker.dataset.label || "" }));
+}
+
+function setupImageMarkerBuilder(node) {
+  const canvas = node.querySelector("[data-marker-canvas]");
+  if (!canvas || canvas.dataset.bound) return;
+  canvas.dataset.bound = "true";
+  let dragged = null;
+  const setPosition = (marker, event) => {
+    const rect = canvas.getBoundingClientRect();
+    marker.style.left = `${Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100))}%`;
+    marker.style.top = `${Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100))}%`;
+  };
+  canvas.addEventListener("pointerdown", (event) => { const marker = event.target.closest(".image-marker"); if (!marker) return; dragged = marker; marker.setPointerCapture?.(event.pointerId); event.preventDefault(); });
+  canvas.addEventListener("pointermove", (event) => { if (dragged) setPosition(dragged, event); });
+  canvas.addEventListener("pointerup", () => { dragged = null; });
+}
+
+function addImageMarker(fieldNode) {
+  const config = fieldNode?.querySelector(".image-builder-config");
+  const canvas = config?.querySelector("[data-marker-canvas]");
+  if (!config || !canvas || !config.dataset.imageSrc) return alert("Escolha uma imagem antes de adicionar marcações.");
+  const marker = { id: uid(), x: 50, y: 50, label: "" };
+  canvas.insertAdjacentHTML("beforeend", renderImageMarkers([marker], "builder"));
+  updateImageMarkerCount(config);
+}
+
+async function loadTemplateImage(input) {
+  const file = input.files?.[0];
+  const config = input.closest(".image-builder-config");
+  const canvas = config?.querySelector("[data-marker-canvas]");
+  if (!file || !config || !canvas) return;
+  const src = await fileToDataUrl(file, { maxSize: 1800, quality: 0.82 });
+  if (!src) return alert("Não foi possível abrir esta imagem.");
+  const markers = getImageMarkers(config);
+  config.dataset.imageSrc = src;
+  canvas.classList.add("has-image");
+  canvas.innerHTML = `<img src="${src}" alt="Imagem do modelo" />${renderImageMarkers(markers, "builder")}`;
+  input.value = "";
+  updateImageMarkerCount(config);
+  setupImageMarkerBuilder(input.closest(".builder-field"));
+}
+
+function updateImageMarkerCount(config) {
+  const count = getImageMarkers(config).length;
+  const output = config.querySelector("[data-marker-count]");
+  if (output) output.textContent = `${count} marcação(ões) configurada(s)`;
+}
+
+function toggleImageMarker(fieldId, markerId, button) {
+  const hidden = document.querySelector(`input[name="${fieldId}_marker_${markerId}"]`);
+  if (!hidden) return;
+  const marked = hidden.value !== "marked";
+  hidden.value = marked ? "marked" : "";
+  button.classList.toggle("marked", marked);
+  if (marked) captureLocation(fieldId, { silent: true });
+}
+
+function addLayoutElement(seed = {}) {
+  const holder = document.getElementById("layout-elements");
+  if (!holder) return;
+  const element = normalizeLayoutElement(seed);
+  const node = document.createElement("div");
+  node.className = "layout-element";
+  node.dataset.layoutId = element.id;
+  node.innerHTML = `<div class="field-head"><select class="layout-kind" aria-label="Tipo">${renderSelectedOptions([["title", "Título"], ["text", "Texto"], ["line", "Linha"], ["box", "Caixa"], ["circle", "Círculo"], ["blank", "Campo livre"]], element.kind)}</select><input class="layout-content" placeholder="Texto ou rótulo" value="${escapeHtml(element.content)}" /><button class="icon-button danger" data-action="remove-layout-element" type="button" title="Remover">×</button></div><div class="layout-position"><label>X <input class="layout-x" type="number" min="0" max="90" value="${element.x}" /></label><label>Y <input class="layout-y" type="number" min="0" max="95" value="${element.y}" /></label><label>Largura <input class="layout-w" type="number" min="2" max="100" value="${element.w}" /></label><label>Altura <input class="layout-h" type="number" min="1" max="100" value="${element.h}" /></label></div>`;
+  holder.appendChild(node);
+  refreshTemplatePreview();
+}
+
+function normalizeLayoutElement(element = {}) {
+  const numeric = (value, fallback) => Math.max(0, Math.min(100, Number.isFinite(Number(value)) ? Number(value) : fallback));
+  return { id: element.id || uid(), kind: ["title", "text", "line", "box", "circle", "blank"].includes(element.kind) ? element.kind : "text", content: String(element.content || ""), x: numeric(element.x, 8), y: numeric(element.y, 8), w: Math.max(2, numeric(element.w, 84)), h: Math.max(1, numeric(element.h, 8)) };
+}
+
+function layoutElementsFromForm(form = document) {
+  return [...form.querySelectorAll(".layout-element")].map((node) => normalizeLayoutElement({ id: node.dataset.layoutId, kind: node.querySelector(".layout-kind")?.value, content: node.querySelector(".layout-content")?.value, x: node.querySelector(".layout-x")?.value, y: node.querySelector(".layout-y")?.value, w: node.querySelector(".layout-w")?.value, h: node.querySelector(".layout-h")?.value }));
+}
+
+function renderLayout(layout = [], mode = "preview") {
+  return (layout || []).map((raw) => {
+    const item = normalizeLayoutElement(raw);
+    const style = `left:${item.x}%;top:${item.y}%;width:${item.w}%;height:${item.h}%;`;
+    const content = escapeHtml(item.content || (item.kind === "blank" ? "Preencha aqui" : ""));
+    return `<div class="layout-shape layout-${item.kind}" style="${style}">${item.kind === "blank" && mode === "runtime" ? `<input aria-label="${content || "Campo livre"}" placeholder="${content || "Preencha aqui"}" />` : content}</div>`;
+  }).join("");
+}
+
+function refreshTemplatePreview() {
+  const preview = document.querySelector("[data-template-preview]");
+  if (!preview) return;
+  preview.innerHTML = `<div class="a4-preview-head">${escapeHtml(document.querySelector('[name="title"]')?.value || "Título do checklist")}</div>${renderLayout(layoutElementsFromForm())}<div class="a4-preview-footer">Prévia A4 · campos operacionais, fotos, áudio, localização e assinatura seguem logo abaixo.</div>`;
 }
 
 function normalizeTemplateField(field = {}) {
-  const kind = field.kind === "signature" ? "signature" : "inspection";
+  const kind = ["signature", "free", "image"].includes(field.kind) ? field.kind : "inspection";
   const options = { ...(field.options || {}) };
   const title = String(field.title || "").trim();
   if (kind === "signature") {
@@ -1285,6 +1431,8 @@ function normalizeTemplateField(field = {}) {
       },
     };
   }
+  if (kind === "free") return { ...field, title, kind, options: { check: false, text: true, photo: Boolean(options.photo), audio: Boolean(options.audio), location: Boolean(options.location), selfieDoc: Boolean(options.selfieDoc) } };
+  if (kind === "image") return { ...field, title: title || "Imagem para avaliação", kind, imageSrc: String(field.imageSrc || ""), imageMarkers: Array.isArray(field.imageMarkers) ? field.imageMarkers.map((marker) => ({ id: marker.id || uid(), x: Number(marker.x) || 50, y: Number(marker.y) || 50, label: String(marker.label || "") })) : [], options: { check: false, text: options.text !== false, photo: options.photo !== false, audio: options.audio !== false, location: options.location !== false, selfieDoc: false } };
   return {
     ...field,
     title,
@@ -1302,6 +1450,12 @@ function normalizeTemplateField(field = {}) {
 
 function applyBuilderKindDefaults(node, applyDefaults = false) {
   const isSignature = node.querySelector(".field-kind")?.value === "signature";
+  const isFree = node.querySelector(".field-kind")?.value === "free";
+  const isImage = node.querySelector(".field-kind")?.value === "image";
+  if (!isImage) {
+    node.classList.remove("image-builder-field");
+    node.querySelector(".image-builder-config")?.remove();
+  }
   const title = node.querySelector(".field-title");
   const options = {
     check: node.querySelector('[data-option="check"]'),
@@ -1322,6 +1476,20 @@ function applyBuilderKindDefaults(node, applyDefaults = false) {
     if (options.audio) options.audio.checked = false;
     if (options.location) options.location.checked = true;
     if (options.selfieDoc && applyDefaults && !options.selfieDoc.dataset.userChanged) options.selfieDoc.checked = true;
+  } else if (isFree) {
+    if (title) title.placeholder = "Campo de preenchimento livre";
+    if (options.check) options.check.checked = false;
+    if (options.text) options.text.checked = true;
+  } else if (isImage) {
+    if (title) title.placeholder = "Imagem para avaliação";
+    if (options.check) options.check.checked = false;
+    if (options.text) options.text.checked = true;
+    if (options.photo) options.photo.checked = true;
+    if (options.audio) options.audio.checked = true;
+    if (options.location) options.location.checked = true;
+    node.classList.add("image-builder-field");
+    renderImageBuilderConfig(node);
+    setupImageMarkerBuilder(node);
   } else if (options.check && applyDefaults && !options.check.dataset.userChanged) {
     if (title) {
       title.placeholder = "Ponto a ser checado";
@@ -1330,7 +1498,7 @@ function applyBuilderKindDefaults(node, applyDefaults = false) {
     options.check.checked = true;
   }
   ["check", "text", "photo", "audio"].forEach((key) => {
-    if (options[key]) options[key].disabled = isSignature;
+    if (options[key]) options[key].disabled = isSignature || (isFree && ["check", "text"].includes(key)) || (isImage && key === "check");
   });
   if (options.location) options.location.disabled = isSignature;
 }
@@ -1389,7 +1557,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.innerHTML = `
-    <section class="modal checklist-modal ${accentClass(tpl)} border-${tpl.borderStyle || "soft"}">
+    <section class="modal checklist-modal ${accentClass(tpl)} ${backgroundClass(tpl)} border-${tpl.borderStyle || "soft"}">
       <div class="topbar checklist-top art-${tpl.artHeader || "clean"}">
         <div>
           <span class="template-kicker">${escapeHtml(tpl.category || "Operação")}</span>
@@ -1399,6 +1567,7 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
         ${modalCloseButton()}
       </div>
       <form class="form" data-form="submission" data-template-id="${tpl.id}" data-task-id="${taskId}" data-submission-id="${submissionId}">
+        ${tpl.layout?.length ? `<section class="runtime-layout"><div class="a4-preview">${renderLayout(tpl.layout, "runtime")}</div></section>` : ""}
         ${renderChecklistHeaderFields(tpl)}
         ${tpl.fields.map((field) => renderRuntimeField(field, tpl)).join("")}
         <button class="primary-button icon-text" type="submit">${editing ? iconUi("edit") : iconUi("check")} ${editing ? "Salvar edição" : "Finalizar checklist"}</button>
@@ -1515,7 +1684,13 @@ async function exportSubmissionPdf(id) {
 async function buildSubmissionPdfBlob(submission) {
   const stats = reportStats(submission);
   const labels = statusLabels(submission);
-  const pages = buildChecklistPdfPages(submission, stats, labels);
+  const rawPages = buildChecklistPdfPages(submission, stats, labels);
+  const pages = [];
+  for (const page of rawPages) {
+    if (page.type !== "photo-inline") { pages.push(page); continue; }
+    const image = await dataUrlToPdfJpeg(page.src);
+    if (image) pages.push({ type: "image", title: submission.templateTitle, accent: accentColor({ accent: submission.templateAccent }), backgroundStyle: submission.templateBackground || "clean", label: `Foto ${page.photoIndex + 1}`, item: buildPdfItem(submission, page.answer, page.answerIndex), metadata: photoPdfMetadata(page.answer, submission, page.metadata), images: [image] });
+  }
   const logo = await dataUrlToPdfJpeg("assets/luma-logo.png");
   if (logo) pages.forEach((page) => {
     page.logo = logo;
@@ -1523,7 +1698,6 @@ async function buildSubmissionPdfBlob(submission) {
   for (const [index, answer] of submission.answers.entries()) {
     const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
     const entries = [
-      ...photos.map((src, photoIndex) => ({ src, label: `Item ${index + 1} - Foto ${photoIndex + 1}: ${answer.title}` })),
       ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${index + 1} - Foto com documento: ${answer.title}` }] : []),
       ...(answer.signature ? [{ src: answer.signature, label: `Item ${index + 1} - Assinatura: ${answer.title}` }] : []),
     ];
@@ -1533,7 +1707,10 @@ async function buildSubmissionPdfBlob(submission) {
         type: "image",
         title: submission.templateTitle,
         accent: accentColor({ accent: submission.templateAccent }),
+        backgroundStyle: submission.templateBackground || "clean",
         label: normalizePdfText(entry.label),
+        item: entry.item || null,
+        metadata: entry.metadata || "",
         logo,
         images: [image],
       });
@@ -1556,6 +1733,7 @@ function buildChecklistPdfPages(submission, stats, labels) {
     stats,
     labels,
     headerValues: submission.headerValues || [],
+    backgroundStyle: submission.templateBackground || "clean",
     items: [],
     images: [],
   });
@@ -1565,6 +1743,16 @@ function buildChecklistPdfPages(submission, stats, labels) {
   let used = pdfInitialCoverUsage(submission);
   const pageLimit = 730;
   submission.answers.forEach((answer, index) => {
+    const hasPhotos = Boolean(answer.photos?.length || answer.photo);
+    if (hasPhotos) {
+      if (page.items.length) pages.push(page);
+      const photos = answer.photos?.length ? answer.photos : [answer.photo];
+      photos.forEach((src, photoIndex) => pages.push({ type: "photo-inline", src, answer, answerIndex: index, photoIndex, metadata: answer.photoMetadata?.[photoIndex] || {} }));
+      page = basePage();
+      page.cover = false;
+      used = 88;
+      return;
+    }
     const item = buildPdfItem(submission, answer, index);
     if (page.items.length && used + item.height > pageLimit) {
       pages.push(page);
@@ -1574,7 +1762,8 @@ function buildChecklistPdfPages(submission, stats, labels) {
     page.items.push(item);
     used += item.height + 10;
   });
-  pages.push(page);
+  if (page.items.length || !pages.length) pages.push(page);
+  if (submission.templateLayout?.length) pages.unshift({ ...basePage(), cover: false, layout: submission.templateLayout });
   return pages;
 }
 
@@ -1592,7 +1781,7 @@ function buildPdfItem(submission, answer, index) {
     answer.audio ? ["Audio", "Arquivo de audio registrado no app."] : null,
     answer.location ? ["Localizacao", answer.location] : null,
     answer.ip ? ["IP", answer.ip] : null,
-    photos.length ? ["Fotos", `${photos.length} imagem(ns) anexada(s) logo apos este item.`] : null,
+    photos.length ? ["Fotos", `${photos.length} imagem(ns) anexada(s) abaixo deste item.`] : null,
     answer.selfieDoc ? ["Documento", "Foto com documento anexada logo apos este item."] : null,
     answer.signature ? ["Assinatura", "Assinatura registrada logo apos este item."] : null,
   ].filter(Boolean).flatMap(([label, value]) => {
@@ -1607,6 +1796,13 @@ function buildPdfItem(submission, answer, index) {
     notes,
     height: Math.max(72, 42 + wrapPdfLine(normalizePdfText(answer.title), 44).length * 14 + notes.length * 12),
   };
+}
+
+function photoPdfMetadata(answer, submission, metadata = {}) {
+  const device = metadata.device || navigator.userAgent || "Navegador não informado";
+  const location = metadata.location || answer.location || "Localização não informada";
+  const ip = answer.ip || "IP não disponível no navegador";
+  return `Data/hora: ${formatDate(metadata.capturedAt || submission.createdAt)} | Lat/long: ${location} | IP: ${ip} | Dispositivo: ${device}`;
 }
 
 function normalizePdfText(value) {
@@ -1757,7 +1953,7 @@ function pdfPageContent(page, images, logo, pageNumber, totalPages) {
 function pdfContentPageContent(page, logo, pageNumber, totalPages) {
   const accent = pdfColor(page.accent);
   const commands = [];
-  commands.push("1 1 1 rg 0 0 595 842 re f");
+  commands.push(`${pdfBackgroundColor(page.backgroundStyle)} rg 0 0 595 842 re f`);
   if (page.cover) {
     commands.push(`${accent} rg 0 720 595 92 re f`);
     commands.push("0.07 0.09 0.15 rg 0 698 595 22 re f");
@@ -1786,6 +1982,7 @@ function pdfContentPageContent(page, logo, pageNumber, totalPages) {
     commands.push(pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"));
   }
   let y = page.cover ? pdfCoverItemsStartY(page) : 768;
+  if (page.layout?.length) commands.push(...pdfLayoutElements(page.layout));
   page.items.forEach((item) => {
     commands.push(...pdfItemCard(item, 42, y, 511, accent));
     y -= item.height + 10;
@@ -1794,31 +1991,54 @@ function pdfContentPageContent(page, logo, pageNumber, totalPages) {
   return commands.join("\n");
 }
 
+function pdfLayoutElements(layout) {
+  const commands = [pdfSectionTitle("Layout visual do checklist", 42, 768, "0.10 0.12 0.16"), "0.94 0.95 0.97 rg 42 70 511 670 re f", "0.78 0.80 0.84 RG 42 70 511 670 re S"];
+  for (const raw of layout) {
+    const item = normalizeLayoutElement(raw);
+    const x = 42 + item.x / 100 * 511;
+    const y = 70 + (100 - item.y - item.h) / 100 * 670;
+    const w = item.w / 100 * 511;
+    const h = Math.max(3, item.h / 100 * 670);
+    if (item.kind === "line") commands.push(`0.18 0.20 0.25 RG 0.8 w ${x.toFixed(1)} ${(y + h / 2).toFixed(1)} m ${(x + w).toFixed(1)} ${(y + h / 2).toFixed(1)} l S`);
+    else if (item.kind === "circle") commands.push(`0.18 0.20 0.25 RG ${x.toFixed(1)} ${y.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re S`);
+    else if (item.kind === "box" || item.kind === "blank") { commands.push(`0.18 0.20 0.25 RG ${x.toFixed(1)} ${y.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re S`); if (item.content) commands.push(pdfText(normalizePdfText(item.content), x + 4, y + Math.max(4, h - 11), Math.min(12, Math.max(7, h / 2)), "0.12 0.14 0.18")); }
+    else if (item.content) commands.push(pdfText(normalizePdfText(item.content), x, y + Math.max(4, h - 11), item.kind === "title" ? 16 : 10, "0.08 0.10 0.15"));
+  }
+  return commands;
+}
+
 function pdfImagePageContent(page, images, logo, pageNumber, totalPages) {
   const accent = pdfColor(page.accent);
   const commands = [
-    "1 1 1 rg 0 0 595 842 re f",
+    `${pdfBackgroundColor(page.backgroundStyle)} rg 0 0 595 842 re f`,
     `${accent} rg 0 804 595 38 re f`,
     ...(logo ? [pdfImageCommand("Logo", 42, 810, 24, 24)] : []),
     pdfText(normalizePdfText(page.title), logo ? 74 : 42, 818, 12, "1 1 1"),
     pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"),
-    pdfSectionTitle("Evidencia anexada", 42, 762, accent),
-    pdfText(normalizePdfText(page.label), 42, 736, 11, "0.12 0.16 0.24"),
-    "0.96 0.98 1 rg 42 94 511 610 re f",
-    "0.84 0.88 0.94 RG 42 94 511 610 re S",
+    ...(page.item ? pdfItemCard(page.item, 42, 766, 511, accent) : [pdfSectionTitle("Evidencia anexada", 42, 762, accent), pdfText(normalizePdfText(page.label), 42, 736, 11, "0.12 0.16 0.24")]),
+    "0.96 0.98 1 rg 42 94 511 430 re f",
+    "0.84 0.88 0.94 RG 42 94 511 430 re S",
   ];
   images.forEach((image, index) => {
     const maxW = 470;
-    const maxH = 560;
+    const maxH = 380;
     const scale = Math.min(maxW / image.width, maxH / image.height);
     const width = Math.round(image.width * scale);
     const height = Math.round(image.height * scale);
     const x = Math.round((595 - width) / 2);
-    const y = Math.round(94 + (610 - height) / 2);
+    const y = Math.round(132 + (380 - height) / 2);
     commands.push("q", `${width} 0 0 ${height} ${x} ${y} cm`, `/Im${index + 1} Do`, "Q");
   });
+  if (page.metadata) {
+    commands.push("0.08 0.09 0.12 rg 42 94 511 30 re f");
+    wrapPdfLine(normalizePdfText(page.metadata), 108).slice(0, 2).forEach((line, index) => commands.push(pdfText(line, 50, 112 - index * 10, 7, "1 1 1")));
+  }
   commands.push(pdfFooter(pageNumber, totalPages, logo));
   return commands.join("\n");
+}
+
+function pdfBackgroundColor(style) {
+  return { blueprint: "0.90 0.94 0.98", blush: "0.99 0.91 0.93", mint: "0.90 0.96 0.93", sand: "0.98 0.94 0.88", lavender: "0.94 0.92 0.98" }[style] || "1 1 1";
 }
 
 function pdfSummaryCards(stats, labels, accent, x, y) {
@@ -1970,7 +2190,11 @@ function selectCheckStatus(fieldId, value, options = {}) {
 function renderRuntimeField(field, tpl = {}) {
   const options = field.options || {};
   const isSignature = field.kind === "signature";
+  const isFree = field.kind === "free";
+  const isImage = field.kind === "image";
   const labels = statusLabels(tpl);
+  if (isFree) return `<fieldset class="runtime-field free-runtime-field" data-field-id="${field.id}"><label>${escapeHtml(field.title || "Campo livre")}</label><textarea name="${field.id}_text" placeholder="Preencha livremente"></textarea>${options.photo ? `<button class="tool-icon camera-tool" data-action="open-photo-picker" data-field="${field.id}" type="button" title="Adicionar foto">${iconCamera()}</button>` : ""}${options.audio ? `<button class="tool-icon" data-action="start-audio" data-field="${field.id}" type="button" title="Gravar áudio">${iconMic()}</button>` : ""}<input type="hidden" name="${field.id}_photos" value="[]" /><input type="hidden" name="${field.id}_audio" /><input type="hidden" name="${field.id}_transcript" />${options.location ? `<input type="hidden" name="${field.id}_location" />` : ""}</fieldset>`;
+  if (isImage) return `<fieldset class="runtime-field image-runtime-field" data-field-id="${field.id}"><div class="image-runtime-head"><div><span class="template-kicker">Imagem interativa</span><h3>${escapeHtml(field.title)}</h3><p class="small">Toque nas bolinhas para marcar ou desmarcar.</p></div></div>${field.imageSrc ? `<div class="marker-runtime-canvas"><img src="${field.imageSrc}" alt="${escapeHtml(field.title)}" />${renderImageMarkers(field.imageMarkers || [], "runtime", field.id)}</div>` : `<div class="empty">A imagem deste campo não foi configurada.</div>`}${(field.imageMarkers || []).map((marker) => `<input type="hidden" name="${field.id}_marker_${marker.id}" value="" />`).join("")}${options.text ? `<button class="secondary-button" data-action="open-observation-modal" data-field="${field.id}" type="button">Adicionar observação</button><input type="hidden" name="${field.id}_text" /><div class="evidence-note hidden" data-note-preview="${field.id}"></div>` : ""}${options.photo ? `<button class="tool-icon camera-tool" data-action="open-photo-picker" data-field="${field.id}" type="button" title="Tirar foto ou escolher imagens">${iconCamera()}</button><input class="hidden-file" data-photo-input="${field.id}" data-photo-source="camera" type="file" accept="image/*" capture="environment" /><input class="hidden-file" data-photo-input="${field.id}" data-photo-source="gallery" type="file" accept="image/*" multiple /><input type="hidden" name="${field.id}_photos" value="[]" /><div class="photo-strip" data-photo-strip="${field.id}"></div>` : ""}${options.audio ? `<button class="tool-icon" data-action="start-audio" data-field="${field.id}" type="button" title="Gravar áudio">${iconMic()}</button><input type="hidden" name="${field.id}_audio" /><input type="hidden" name="${field.id}_transcript" /><div class="audio-strip" data-audio-preview="${field.id}"></div>` : ""}${options.location ? `<input type="hidden" name="${field.id}_location" /><span class="small location-note" data-location-note="${field.id}">Localização será capturada ao marcar.</span>` : ""}</fieldset>`;
   return `
     <fieldset class="runtime-field ${isSignature ? "signature-field" : ""}" data-field-id="${field.id}">
       <div class="inspection-card">
@@ -2035,6 +2259,10 @@ function hydrateSubmissionForm(submission) {
     setInputValue(`${fieldId}_signature`, answer.signature || "");
     if (answer.signature) renderSignaturePreview(fieldId, answer.signature);
     setInputValue(`${fieldId}_selfieDoc_existing`, answer.selfieDoc || "");
+    (answer.imageMarks || []).filter((marker) => marker.marked).forEach((marker) => {
+      setInputValue(`${fieldId}_marker_${marker.id}`, "marked");
+      document.querySelector(`[data-field-id="${fieldId}"] .image-marker[data-marker="${marker.id}"]`)?.classList.add("marked");
+    });
   });
 }
 
@@ -2196,7 +2424,7 @@ function reportHtml(report) {
   const locations = [...new Set(report.answers.map((answer) => answer.location).filter(Boolean))];
   const reportAccent = accentColor({ accent: report.templateAccent });
   return `
-    <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })}" style="--accent-color:${reportAccent}; background:linear-gradient(135deg, ${reportAccent}, #111827);">
+    <header class="report-cover report-a4-cover ${accentClass({ accent: report.templateAccent })} ${backgroundClass(report)}" style="--accent-color:${reportAccent};">
       <div>
         <img class="report-logo" src="assets/luma-logo.png" alt="Luma" />
         <span class="report-label">Relatório técnico de checklist</span>
@@ -2238,9 +2466,11 @@ function reportHtml(report) {
 
     ${renderReportHeaderValues(report)}
 
+    ${report.templateLayout?.length ? `<section class="report-section"><div class="report-section-title"><span>01</span><h2>Layout do checklist</h2></div><div class="a4-preview report-layout-preview">${renderLayout(report.templateLayout, "report")}</div></section>` : ""}
+
     <section class="report-section">
       <div class="report-section-title">
-        <span>01</span>
+        <span>${report.templateLayout?.length ? "02" : "01"}</span>
         <h2>Resumo executivo</h2>
       </div>
       <p class="report-summary-text">
@@ -2261,7 +2491,7 @@ function reportHtml(report) {
 
     <section class="report-section">
       <div class="report-section-title">
-        <span>02</span>
+        <span>${report.templateLayout?.length ? "03" : "02"}</span>
         <h2>Itens verificados</h2>
       </div>
       <div class="report-check-list">
@@ -2271,7 +2501,7 @@ function reportHtml(report) {
 
     <section class="report-section report-signoff">
       <div class="report-section-title">
-        <span>03</span>
+        <span>${report.templateLayout?.length ? "04" : "03"}</span>
         <h2>Assinatura e rastreabilidade</h2>
       </div>
       ${renderSignatureBlocks(report)}
@@ -2340,6 +2570,7 @@ function renderReportItemCard(report, answer, index) {
     answer.signature ? ["Assinatura", "Assinatura registrada."] : null,
   ].filter(Boolean);
   const media = [
+    answer.imageSrc ? `<figure class="report-marked-image">${renderMarkedImage(answer)}</figure>` : "",
     renderReportPhotos(answer),
     answer.selfieDoc ? `<figure><img src="${answer.selfieDoc}" alt="Documento anexado" /><figcaption>Foto com documento</figcaption></figure>` : "",
     answer.signature ? `<figure><img src="${answer.signature}" alt="Assinatura" /><figcaption>Assinatura</figcaption></figure>` : "",
@@ -2361,6 +2592,10 @@ function renderReportItemCard(report, answer, index) {
       ${media.trim() ? `<div class="report-media report-media-under-item">${media}</div>` : ""}
     </article>
   `;
+}
+
+function renderMarkedImage(answer) {
+  return `<div class="marker-runtime-canvas report-marker-canvas"><img src="${answer.imageSrc}" alt="Imagem avaliada" />${renderImageMarkers(answer.imageMarks || [], "runtime", answer.fieldId)}</div><figcaption>Marcação(ões) preenchida(s) no checklist</figcaption>`;
 }
 
 function renderEvidenceSection(report) {
@@ -2440,6 +2675,8 @@ async function handleSubmit(event) {
   if (formType === "login") await submitLogin(form, data);
   if (formType === "signup-details") submitSignupDetails(data);
   if (formType === "plan-payment") await submitPlanPayment(form, data);
+  if (formType === "change-password") await submitChangePassword(form, data);
+  if (formType === "cancel-plan") await cancelPlan(data);
   if (formType === "template") await submitTemplate(form, data);
   if (formType === "task") await submitTask(data);
   if (formType === "asaas-charge") await submitAsaasCharge(form, data);
@@ -2514,7 +2751,7 @@ function renderPlanPaymentResult(result) {
     ${result.pixPayload ? `<div class="form-row"><label>Pix copia e cola</label><textarea readonly>${escapeHtml(result.pixPayload)}</textarea></div>` : ""}
     ${result.status === "pending" ? `<button class="secondary-button" type="button" data-action="check-plan-status">Verificar pagamento</button>` : ""}
     ${!["active", "pending"].includes(result.status) && !isPaidPlan(currentUser) ? `<button class="primary-button" type="button" data-action="renew-plan">Assinar novamente</button>` : ""}
-    ${result.status === "active" || result.status === "pending" ? `<button class="ghost-button" type="button" data-action="cancel-plan">Cancelar recorrência</button>` : ""}
+    ${result.status === "active" || result.status === "pending" ? `<button class="ghost-button" type="button" data-action="open-cancel-plan-modal">Cancelar recorrência</button>` : ""}
   </div>`;
 }
 
@@ -2542,15 +2779,46 @@ async function checkPlanStatus() {
   openPlanPaymentModal(body.billing);
 }
 
-async function cancelPlan() {
-  if (!confirm("Cancelar a cobrança recorrente deste plano?")) return;
-  const response = await fetch("/api/plan/cancel", { method: "POST" });
+function openCancelPlanModal() {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<section class="modal compact-modal"><div class="topbar"><div><h2>Cancelar meu plano</h2><p>Seu acesso será alterado para o plano gratuito e a cobrança mensal será encerrada no Asaas.</p></div>${modalCloseButton()}</div><form class="form" data-form="cancel-plan"><div class="form-row"><label>Por que está cancelando?</label><select name="reason" required><option value="">Selecione um motivo</option><option>Preço</option><option>Não preciso mais do plano</option><option>Faltam recursos</option><option>Problema técnico</option><option>Outro</option></select></div><div class="form-row"><label>Comentário opcional</label><textarea name="detail" placeholder="Conte-nos como podemos melhorar"></textarea></div><button class="danger-button" type="submit">Confirmar cancelamento</button></form></section>`;
+  mountModal(modal);
+}
+
+async function cancelPlan(data) {
+  const reason = `${String(data?.get("reason") || "")}${data?.get("detail") ? ` — ${String(data.get("detail")).trim()}` : ""}`.trim();
+  if (!reason) return alert("Selecione o motivo do cancelamento.");
+  const response = await fetch("/api/plan/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) return alert(body.error || "Não foi possível cancelar.");
   const auth = await fetch("/api/auth/me");
   currentUser = (await auth.json()).user;
   state = await loadState();
   closeAllModals();
+  render();
+}
+
+async function submitChangePassword(form, data) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/auth/password", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword: String(data.get("currentPassword") || ""), nextPassword: String(data.get("nextPassword") || "") }) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "Não foi possível atualizar a senha.");
+    form.reset();
+    alert("Senha atualizada.");
+  } catch (error) { alert(error.message); }
+  finally { button.disabled = false; }
+}
+
+async function adminSetPlan(id, plan) {
+  const message = plan === "paid" ? "Liberar o plano pago sem gerar cobrança para este acesso?" : "Alterar para o plano gratuito e encerrar qualquer recorrência no Asaas?";
+  if (!confirm(message)) return;
+  const response = await fetch(`/api/admin/users/${encodeURIComponent(id)}/plan`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan }) });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return alert(body.error || "Não foi possível atualizar o plano.");
+  state = await loadState();
   render();
 }
 
@@ -2567,11 +2835,14 @@ async function submitTemplate(form, data) {
     node.querySelectorAll("[data-option]").forEach((input) => {
       options[input.dataset.option] = input.checked;
     });
+    const imageConfig = node.querySelector(".image-builder-config");
     return normalizeTemplateField({
       id: node.dataset.fieldId || uid(),
       title: node.querySelector(".field-title").value.trim(),
       kind: node.querySelector(".field-kind").value,
       options,
+      imageSrc: imageConfig?.dataset.imageSrc || "",
+      imageMarkers: imageConfig ? getImageMarkers(imageConfig) : [],
     });
   }).filter((field) => field?.title || field?.kind === "signature");
   if (!fields.length) return alert("Adicione pelo menos um campo.");
@@ -2586,6 +2857,8 @@ async function submitTemplate(form, data) {
     accent: String(data.get("accent") || "blue"),
     artHeader: String(data.get("artHeader") || "clean"),
     borderStyle: String(data.get("borderStyle") || "soft"),
+    backgroundStyle: String(data.get("backgroundStyle") || "clean"),
+    layout: [],
     statusOkLabel: String(data.get("statusOkLabel") || "Correto").trim() || "Correto",
     statusFailLabel: String(data.get("statusFailLabel") || "Incorreto").trim() || "Incorreto",
     statusOkIcon: String(data.get("statusOkIcon") || "check"),
@@ -2668,10 +2941,13 @@ async function submitChecklist(form, data) {
       location: String(data.get(`${field.id}_location`) || ""),
       ip: String(data.get(`${field.id}_ip`) || ""),
       photos: await normalizeImageDataUrls(safeJson(String(data.get(`${field.id}_photos`) || "[]"), [])),
+      photoMetadata: safeJson(String(data.get(`${field.id}_photoMetadata`) || "[]"), []),
       photo: await fileToDataUrl(data.get(`${field.id}_photo`)),
       selfieDoc: (await fileToDataUrl(data.get(`${field.id}_selfieDoc`), { maxSize: 1400, quality: 0.72 })) || String(data.get(`${field.id}_selfieDoc_existing`) || ""),
       audio: String(data.get(`${field.id}_audio`) || ""),
       signature: String(data.get(`${field.id}_signature`) || ""),
+      imageSrc: field.kind === "image" ? field.imageSrc || "" : "",
+      imageMarks: field.kind === "image" ? (field.imageMarkers || []).map((marker) => ({ ...marker, marked: data.get(`${field.id}_marker_${marker.id}`) === "marked" })) : [],
     });
   }
   const existingId = form.dataset.submissionId || "";
@@ -2683,6 +2959,8 @@ async function submitChecklist(form, data) {
     templateCategory: tpl.category || "Operação",
     templateArtHeader: tpl.artHeader || "clean",
     templateBorderStyle: tpl.borderStyle || "soft",
+    templateBackground: tpl.backgroundStyle || "clean",
+    templateLayout: tpl.layout || [],
     statusOkLabel: tpl.statusOkLabel || "Correto",
     statusFailLabel: tpl.statusFailLabel || "Incorreto",
     statusOkIcon: tpl.statusOkIcon || "check",
@@ -2746,7 +3024,7 @@ function handleGlobalClick(event) {
   if (action === "manage-payment") checkPlanStatus();
   if (action === "check-plan-status") checkPlanStatus();
   if (action === "renew-plan") openPlanPaymentModal();
-  if (action === "cancel-plan") cancelPlan();
+  if (action === "open-cancel-plan-modal") openCancelPlanModal();
   if (action === "toggle-mobile-menu") toggleMobileMenu();
   if (action === "close-mobile-menu") closeMobileMenu();
   if (action === "install-app") installApp();
@@ -2758,6 +3036,9 @@ function handleGlobalClick(event) {
   if (action === "open-template-modal") openTemplateModal();
   if (action === "open-task-modal") openTaskModal();
   if (action === "add-builder-field") addBuilderField();
+  if (action === "add-image-marker") addImageMarker(target.closest(".builder-field"));
+  if (action === "add-layout-element") addLayoutElement({ kind: target.dataset.kind });
+  if (action === "remove-layout-element") { target.closest(".layout-element")?.remove(); refreshTemplatePreview(); }
   if (action === "add-header-field") addHeaderFieldClean();
   if (action === "remove-builder-row") target.closest(".builder-field")?.remove();
   if (action === "close-modal") closeModal();
@@ -2767,6 +3048,7 @@ function handleGlobalClick(event) {
   }
   if (action === "open-fill-picker") openFillPickerModal();
   if (action === "select-check-status") selectCheckStatus(target.dataset.field, target.dataset.value);
+  if (action === "toggle-image-marker") toggleImageMarker(target.dataset.field, target.dataset.marker, target);
   if (action === "open-photo-picker") openPhotoPicker(target.dataset.field);
   if (action === "photo-camera") triggerPhotoInput(target.dataset.field, "camera");
   if (action === "photo-gallery") triggerPhotoInput(target.dataset.field, "gallery");
@@ -2818,6 +3100,7 @@ function handleGlobalClick(event) {
   }
   if (action === "delete-task") deleteTask(target.dataset.id);
   if (action === "delete-user") deleteUser(target.dataset.id);
+  if (action === "admin-set-plan") adminSetPlan(target.dataset.id, target.dataset.plan);
   if (action === "edit-template") openTemplateModal(target.dataset.id);
   if (action === "delete-template") deleteTemplate(target.dataset.id);
   if (action === "duplicate-template") duplicateTemplate(target.dataset.id);
@@ -2826,17 +3109,25 @@ function handleGlobalClick(event) {
 
 function handleChange(event) {
   const input = event.target;
-  if (input.matches("[data-photo-input]")) addPhotosFromInput(input);
+  if (input.matches(".template-image-upload")) loadTemplateImage(input);
+  else if (input.matches("[data-photo-input]")) addPhotosFromInput(input);
   else if (input.matches('input[type="file"]')) previewFile(input);
   if (input.matches("[data-option]")) input.dataset.userChanged = "true";
   if (input.matches(".field-kind")) {
     const node = input.closest(".builder-field");
     applyBuilderKindDefaults(node, true);
   }
+  if (input.matches(".layout-kind, .layout-content, .layout-x, .layout-y, .layout-w, .layout-h, [name=title]")) refreshTemplatePreview();
 }
 
 function handleInput(event) {
   if (event.target.matches("[data-signature]")) return;
+  if (event.target.matches("[data-community-search]")) {
+    const query = event.target.value.trim().toLocaleLowerCase("pt-BR");
+    document.querySelectorAll("[data-community-list] .template-card").forEach((card) => {
+      card.hidden = Boolean(query) && !card.textContent.toLocaleLowerCase("pt-BR").includes(query);
+    });
+  }
 }
 
 function mountModal(backdrop) {
@@ -2942,9 +3233,19 @@ async function addPhotosFromInput(input) {
   const hidden = document.querySelector(`input[name="${fieldId}_photos"]`);
   if (!hidden) return;
   const current = safeJson(hidden.value, []);
+  let metadataInput = document.querySelector(`input[name="${fieldId}_photoMetadata"]`);
+  if (!metadataInput) {
+    metadataInput = document.createElement("input");
+    metadataInput.type = "hidden";
+    metadataInput.name = `${fieldId}_photoMetadata`;
+    hidden.insertAdjacentElement("afterend", metadataInput);
+  }
+  const currentMetadata = safeJson(metadataInput.value, []);
   const files = [...(input.files || [])].filter((file) => file.type.startsWith("image/"));
   const nextPhotos = await Promise.all(files.map(fileToDataUrl));
   hidden.value = JSON.stringify([...current, ...nextPhotos.filter(Boolean)]);
+  const location = document.querySelector(`input[name="${fieldId}_location"]`)?.value || "";
+  metadataInput.value = JSON.stringify([...currentMetadata, ...nextPhotos.filter(Boolean).map(() => ({ capturedAt: new Date().toISOString(), device: navigator.userAgent || "", location }))]);
   input.value = "";
   renderPhotoStrip(fieldId);
 }
@@ -2955,6 +3256,10 @@ function removePhoto(fieldId, index) {
   const photos = safeJson(hidden.value, []);
   photos.splice(index, 1);
   hidden.value = JSON.stringify(photos);
+  const metadata = safeJson(document.querySelector(`input[name="${fieldId}_photoMetadata"]`)?.value || "[]", []);
+  metadata.splice(index, 1);
+  const metadataInput = document.querySelector(`input[name="${fieldId}_photoMetadata"]`);
+  if (metadataInput) metadataInput.value = JSON.stringify(metadata);
   renderPhotoStrip(fieldId);
 }
 

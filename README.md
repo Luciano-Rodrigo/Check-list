@@ -38,12 +38,13 @@ Senha: admin123 (apenas no ambiente local; defina `ADMIN_PASSWORD` antes de publ
 - Login por sessão no servidor e senha armazenada como hash scrypt.
 - Cadastro em três etapas: individual ou empresa, informações e escolha do plano.
 - Individual gratuito: 3 preenchimentos por dia, modelos próprios e tarefas; individual pago: preenchimentos ilimitados e comunidade.
-- Empresa gratuita: 2 preenchimentos por dia por acesso e até 2 colaboradores; empresa paga: preenchimentos ilimitados e até 5 colaboradores.
+- Empresa gratuita: 2 preenchimentos por dia por acesso e até 2 colaboradores. Empresa paga: R$ 34,90/mês pelo titular + 2 colaboradores, com preenchimentos ilimitados; cada colaborador adicional custa R$ 4,90/mês.
 - Cotas diárias em America/Sao_Paulo, preservadas mesmo ao excluir preenchimentos; controle de revisão evita sobrescrita silenciosa entre dispositivos.
 - No retorno ao gratuito, colaboradores excedentes ficam suspensos sem apagar dados; os dois mais antigos mantêm acesso.
-- Conta paga é ativada após confirmação do Asaas por webhook autenticado. Cartão usa a Fatura Asaas; Pix Automático depende da elegibilidade da conta Asaas.
+- Conta paga é ativada após confirmação do Asaas por webhook autenticado. A confirmação mensal mantém o plano ativo; uma mensalidade vencida rebaixa o acesso para o gratuito até uma nova confirmação. Cartão usa a Fatura Asaas; Pix Automático depende da elegibilidade da conta Asaas.
 - Papéis ADM, Empresa, Agente e Pessoal.
 - Criação de modelos públicos ou privados.
+- Abas separadas para modelos privados e da comunidade, com busca por palavra-chave.
 - Categoria e cor visual para os modelos.
 - Distribuição de modelos para agentes da empresa.
 - Cinco modelos públicos iniciais: veículo, ambiente corporativo, entrega técnica, segurança operacional e estoque.
@@ -61,6 +62,10 @@ Senha: admin123 (apenas no ambiente local; defina `ADMIN_PASSWORD` antes de publ
 - Notificações enquanto o app estiver aberto.
 - Botões rápidos para tarefa e preenchimento de checklist.
 - Opções avançadas de arte para modelos: cor, categoria, cabeçalho e borda.
+- Fundos A4 prontos em estilos pastel, com miniaturas para escolha no modelo e aplicação no PDF.
+- Campo de imagem interativa: envio de planta/desenho, bolinhas arrastáveis para pontos de avaliação e marcação no preenchimento.
+- Fotos de evidência ficam vinculadas ao item no PDF, em tamanho reduzido, com data/hora, localização, IP disponível e identificação do navegador.
+- Meu perfil para todos os acessos, com troca de senha; titulares podem cancelar no modal com motivo e encerrar a recorrência.
 - Tema claro e escuro.
 - PWA instalável com manifesto, service worker, ícone Luma, favicon e Apple touch icon.
 - Botão de instalação na tela de login.
@@ -81,6 +86,7 @@ Passo a passo completo, variáveis, webhook e checklist de publicação: [DEPLOY
 - As tabelas e a migração inicial são executadas em transação antes de abrir a porta HTTP. Uma trava no banco serializa inicializações concorrentes.
 - Em produção, banco e senha administrativa forte são obrigatórios; cobranças configuradas também exigem ambiente Asaas explícito e token de webhook com pelo menos 32 caracteres.
 - A chave da API deve ficar em **`ASAAS_API_KEY`**, nas variáveis do serviço web, nunca no frontend ou no GitHub.
+- O administrador pode liberar ou revogar o plano pago de acessos individuais e empresas sem gerar cobrança. Essa ação só é aceita pela API para o papel ADM.
 
 O plano gratuito não precisa do Asaas. Cartão é preenchido na página hospedada pelo Asaas, sem dados de cartão passarem pelo aplicativo. Pix Automático requer conta Asaas elegível e autorização do pagador. O webhook libera o acesso após confirmação; abrir a fatura ou gerar o QR Code não ativa o plano.
 

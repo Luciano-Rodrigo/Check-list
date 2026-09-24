@@ -27,7 +27,8 @@ O workflow `Tests` roda em Node.js 22 e executa a suite em memoria e em PostgreS
 | `ASAAS_API_KEY` | Chave completa da API do Asaas, correspondente ao ambiente escolhido. |
 | `ASAAS_WEBHOOK_TOKEN` | Segredo aleatorio de pelo menos 32 caracteres. Configure exatamente o mesmo no webhook Asaas. Nao e a chave da API. |
 | `PLAN_PERSONAL_PRICE` | `9.90`, mensal em reais. |
-| `PLAN_COMPANY_PRICE` | `15.90`, mensal em reais. |
+| `PLAN_COMPANY_PRICE` | `34.90`, mensal em reais para a empresa e dois colaboradores. |
+| `PLAN_COMPANY_EXTRA_COLLABORATOR_PRICE` | `4.90`, mensal em reais por colaborador a partir do terceiro. |
 | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `30`, para aguardar requisicoes em andamento e encerrar conexoes antes de parar. |
 
 Nao fixe `PORT`: o servidor utiliza o valor fornecido pela Railway. Nao configure `ASAAS_TEST_BASE_URL`, `TEST_DATABASE_URL` nem `NODE_ENV=test` em producao.
@@ -63,6 +64,8 @@ Eventos tratados pelo sistema:
 ```text
 PAYMENT_CONFIRMED
 PAYMENT_RECEIVED
+PAYMENT_OVERDUE
+PAYMENT_DELETED
 PAYMENT_REFUNDED
 PAYMENT_CHARGEBACK_REQUESTED
 PAYMENT_CHARGEBACK_DISPUTE
@@ -75,14 +78,14 @@ PIX_AUTOMATIC_RECURRING_PAYMENT_INSTRUCTION_CREATED
 
 O Asaas envia esse token no cabecalho `asaas-access-token`; ele e diferente do cabecalho `access_token` usado pelo backend para chamar a API. Nao ha necessidade de compartilhar a chave com o navegador. O cartao e informado na fatura hospedada pelo Asaas.
 
-O Pix integrado e **Pix Automatico**, sujeito a habilitacao/elegibilidade da conta Asaas. Nao prometa recorrencia Pix antes de homologar a autorizacao inicial e as cobrancas seguintes.
+O Pix integrado e **Pix Automatico**, sujeito a habilitacao/elegibilidade da conta Asaas. Nao prometa recorrencia Pix antes de homologar a autorizacao inicial e as cobrancas seguintes. Habilite tambem `PAYMENT_OVERDUE`: esse evento rebaixa o acesso ao plano gratuito até que uma nova cobrança seja confirmada.
 
 ## 6. Checklist antes de vender
 
 - Confirmar que o workflow GitHub passou, inclusive PostgreSQL e persistencia apos reinicio.
 - Criar contas de teste individuais e empresariais; conferir limites e isolamento entre empresas.
 - Criar tarefa, modelo e preenchimento, reiniciar o servico e verificar que continuam salvos.
-- Homologar cartao e Pix Automatico em Asaas Sandbox: pendencia, confirmacao, evento repetido, cancelamento e estorno. Verificar os eventos no Asaas e o plano no ADM.
+- Homologar cartao e Pix Automatico em Asaas Sandbox: pendencia, confirmacao, vencimento (`PAYMENT_OVERDUE`), evento repetido, cancelamento e estorno. Testar um terceiro colaborador para confirmar o ajuste de R$ 4,90 na assinatura.
 - Usar ambiente/banco separados para homologacao. Para vender, trocar pela chave de producao, `ASAAS_ENV=production` e configurar o webhook no painel de producao; nao reutilizar cadastros de cobranca sandbox no banco definitivo.
 - Habilitar backups recorrentes do volume PostgreSQL e testar restauracao. Rollback de codigo nao restaura dados.
 - Monitorar erros, disponibilidade, armazenamento e fila de webhooks; os healthchecks de deploy nao substituem monitoramento continuo.

@@ -99,6 +99,7 @@ create table if not exists plan_billing (
 alter table plan_billing add column if not exists amount numeric(12,2);
 alter table plan_billing add column if not exists terms_accepted_at timestamptz;
 alter table plan_billing add column if not exists pix_activation_granted boolean not null default false;
+alter table plan_billing add column if not exists cancellation_reason text;
 
 create table if not exists checklist_usage (
   submission_id text primary key,

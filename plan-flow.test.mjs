@@ -186,7 +186,8 @@ test("cadastro, limites por acesso e ativacao pelo webhook Asaas", async (t) => 
   assert.equal((await api("/api/asaas/webhook", "POST", companyEvent, "", "test-webhook-token-long-enough-123456")).status, 200);
   for (let i = 2; i < 6; i++) {
     const created = await api("/api/users", "POST", { name: `Agente ${i}`, email: `agent-${i}@example.invalid`, password: "teste-senha-123" }, company.cookie);
-    assert.equal(created.status, i < 5 ? 201 : 403);
+    // Plano de empresa inclui dois colaboradores e permite adicionais cobrados por acesso.
+    assert.equal(created.status, 201);
   }
   assert.equal((await api("/api/state", "GET", null, company.cookie)).body.templates.some((item) => item.id === "community-test"), true);
   for (let i = 0; i < 4; i++) {
@@ -292,7 +293,7 @@ test("cadastro, limites por acesso e ativacao pelo webhook Asaas", async (t) => 
     assert.equal((await api("/api/asaas/webhook", "POST", { ...cardEvent, id: "evt_settled", event: "PAYMENT_RECEIVED" }, "", "test-webhook-token-long-enough-123456")).status, 200);
     assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.paidUntil, before.paidUntil);
     assert.equal((await api("/api/plan/cancel", "POST", {}, subscriber.cookie)).status, 200);
-    assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.plan, "paid");
+    assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.plan, "free");
     payments.get(cardEvent.payment.id).status = "REFUNDED";
     assert.equal((await api("/api/asaas/webhook", "POST", { ...cardEvent, id: "evt_refund", event: "PAYMENT_REFUNDED" }, "", "test-webhook-token-long-enough-123456")).status, 200);
     assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.plan, "free");
@@ -346,7 +347,7 @@ test("cadastro, limites por acesso e ativacao pelo webhook Asaas", async (t) => 
     assert.equal((await api("/api/auth/login", "POST", { email: "agent-4@example.invalid", password: "teste-senha-123" })).status, 403);
     assert.equal((await api("/api/state", "GET", null, agentLogin.cookie)).status, 200);
     const loaded = (await api("/api/state", "GET", null, company.cookie)).body;
-    assert.equal(loaded.users.filter((user) => user.role === "agent").length, 5);
+    assert.equal(loaded.users.filter((user) => user.role === "agent").length, 6);
   });
 
   await t.test("PostgreSQL preserva sessoes, dados e cobrancas apos reiniciar", { skip: !database }, async () => {

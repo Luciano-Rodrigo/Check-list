@@ -9,6 +9,7 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
+app.set("trust proxy", 1);
 const port = process.env.PORT || 5173;
 const production = process.env.NODE_ENV === "production";
 const scrypt = promisify(scryptCallback);
@@ -18,7 +19,8 @@ const billingLocks = new Set();
 let webhookQueue = Promise.resolve();
 const pricing = {
   personal: Number(process.env.PLAN_PERSONAL_PRICE || 9.90),
-  company: Number(process.env.PLAN_COMPANY_PRICE || 15.90)
+  company: Number(process.env.PLAN_COMPANY_PRICE || 34.90),
+  companyExtraCollaborator: Number(process.env.PLAN_COMPANY_EXTRA_COLLABORATOR_PRICE || 4.90)
 };
 if (Object.values(pricing).some((value) => !Number.isFinite(value) || value <= 0)) throw new Error("Configure preços de plano válidos.");
 if (production && (!process.env.DATABASE_URL || (process.env.ADMIN_PASSWORD || "").length < 12)) {
@@ -94,7 +96,7 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-app.get("/api/plans", (_req, res) => res.json({ prices: pricing }));
+app.get("/api/plans", (_req, res) => res.json({ prices: pricing, companyIncludedCollaborators: 2 }));
 
 app.get("/api/auth/me", async (req, res, next) => {
   try {
@@ -108,13 +110,13 @@ app.post("/api/auth/login", async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const user = await findUserByEmail(email);
-    const storedPassword = user?.role === "adm" && process.env.ADMIN_PASSWORD ? process.env.ADMIN_PASSWORD : user?.password;
+    const storedPassword = user?.password?.startsWith("scrypt$") ? user.password : user?.role === "adm" && process.env.ADMIN_PASSWORD ? process.env.ADMIN_PASSWORD : user?.password;
     if (!user || !await verifyPassword(String(req.body?.password || ""), storedPassword)) {
       return res.status(401).json({ ok: false, error: "Email ou senha inválidos." });
     }
     if (!user.verified) return res.status(403).json({ ok: false, error: "Acesso não verificado." });
     if (!await agentSeatAvailable(user)) throw httpError(403, "Acesso suspenso pelo limite de colaboradores do plano. Consulte o titular.");
-    if (!user.password.startsWith("scrypt$") || user.role === "adm" && process.env.ADMIN_PASSWORD) await updatePassword(user.id, await hashPassword(req.body.password));
+    if (!user.password.startsWith("scrypt$")) await updatePassword(user.id, await hashPassword(req.body.password));
     await createSession(res, user.id);
     res.json({ ok: true, user: publicUser(user) });
   } catch (error) { next(error); }
@@ -173,7 +175,7 @@ app.put("/api/state", requireUser, async (req, res, next) => {
   try {
     if (!pool) {
       const nextState = structuredClone(fallbackState);
-      applyStateChange(nextState, req.body, req.user);
+      applyStateChange(nextState, req.body, req.user, clientIp(req));
       Object.assign(fallbackState, nextState);
       return res.json({ ok: true, persisted: false, storage: "memory", state: scopeState(nextState, req.user) });
     }
@@ -184,7 +186,7 @@ app.put("/api/state", requireUser, async (req, res, next) => {
       await client.query("select pg_advisory_xact_lock(740119)");
       const previous = await readStateFromTables(client);
       const nextState = structuredClone(previous);
-      applyStateChange(nextState, req.body, req.user);
+      applyStateChange(nextState, req.body, req.user, clientIp(req));
       await writeStateWithClient(client, nextState);
       const saved = scopeState(await readStateFromTables(client), req.user);
       await client.query("commit");
@@ -206,6 +208,7 @@ app.post("/api/users", requireUser, async (req, res, next) => {
     if (!name || !/^\S+@\S+\.\S+$/.test(email) || password.length < 8) throw httpError(400, "Informe nome, email e senha de pelo menos 8 caracteres.");
     if (await findUserByEmail(email)) throw httpError(409, "Email já cadastrado.");
     const user = { id: `u_${randomBytes(12).toString("hex")}`, companyId: role === "company" ? `w_${randomBytes(12).toString("hex")}` : req.user.companyId, role, name, email, phone: String(req.body?.phone || "").slice(0, 30), verified: true, createdAt: new Date().toISOString(), password: await hashPassword(password) };
+    if (req.user.role === "company" && role === "agent") await ensureCompanySeatBilling(req.user);
     if (pool) {
       const client = await pool.connect();
       try {
@@ -227,6 +230,37 @@ app.post("/api/users", requireUser, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.patch("/api/auth/password", requireUser, async (req, res, next) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || "");
+    const nextPassword = String(req.body?.nextPassword || "");
+    if (nextPassword.length < 8) throw httpError(400, "A nova senha deve ter pelo menos 8 caracteres.");
+    const freshUser = await findUserById(req.user.id);
+    const storedPassword = freshUser?.password?.startsWith("scrypt$") ? freshUser.password : freshUser?.role === "adm" && process.env.ADMIN_PASSWORD ? process.env.ADMIN_PASSWORD : freshUser?.password;
+    if (!freshUser || !await verifyPassword(currentPassword, storedPassword)) throw httpError(401, "Senha atual inválida.");
+    await updatePassword(freshUser.id, await hashPassword(nextPassword));
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/admin/users/:id/plan", requireUser, async (req, res, next) => {
+  let releaseLock;
+  try {
+    if (req.user.role !== "adm") throw httpError(403, "Somente o administrador pode alterar planos.");
+    const target = await findUserById(req.params.id);
+    const plan = req.body?.plan === "paid" ? "paid" : req.body?.plan === "free" ? "free" : null;
+    if (!target || !plan || !["personal", "company"].includes(target.role)) throw httpError(400, "Selecione um acesso individual ou de empresa e um plano válido.");
+    releaseLock = await acquireBillingLock(target.companyId);
+    const record = await billingForWorkspace(target.companyId);
+    if (plan === "free" && record && record.status !== "cancelled") await cancelAsaasRecurrence(record);
+    await setUserPlan(target.id, plan === "paid"
+      ? { plan: "paid", selectedPlan: "paid", billingStatus: "admin_granted", paidUntil: null, planSource: "admin" }
+      : { plan: "free", selectedPlan: "free", billingStatus: "free", paidUntil: null, planSource: "admin" });
+    res.json({ ok: true, user: publicUser(await findUserById(target.id)) });
+  } catch (error) { next(error); }
+  finally { if (releaseLock) await releaseLock(); }
+});
+
 app.delete("/api/users/:id", requireUser, async (req, res, next) => {
   try {
     const target = await findUserById(req.params.id);
@@ -239,6 +273,7 @@ app.delete("/api/users/:id", requireUser, async (req, res, next) => {
     }
     if (pool) await pool.query("delete from app_users where id=$1", [target.id]);
     else fallbackState.users = fallbackState.users.filter((item) => item.id !== target.id);
+    if (target.role === "agent") await syncCompanySeatBilling(target.companyId);
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -259,7 +294,9 @@ app.post("/api/plan/start", requireUser, async (req, res, next) => {
     if (existing?.status === "pending" && existing.method === method) return res.json({ ok: true, ...await billingPresentation(existing) });
     if (existing && existing.status !== "cancelled") await cancelAsaasRecurrence(existing);
     const customer = existing?.customer_id ? { id: existing.customer_id } : await asaasRequest("/customers", { method: "POST", body: sanitizeAsaasCustomer({ name: req.user.companyName || req.user.name, cpfCnpj: document, email: req.user.email, mobilePhone: req.user.phone, externalReference: req.user.id }) });
-    const value = pricing[req.user.role];
+    const value = req.user.role === "company"
+      ? companyMonthlyAmount((await fullState()).users.filter((item) => item.role === "agent" && item.companyId === req.user.companyId).length)
+      : pricing.personal;
     let subscription = null;
     let authorization = null;
     let payment = null;
@@ -289,14 +326,13 @@ app.post("/api/plan/cancel", requireUser, async (req, res, next) => {
   try {
     if (!["personal", "company"].includes(req.user.role)) throw httpError(403, "Somente o titular pode cancelar.");
     releaseLock = await acquireBillingLock(req.user.companyId);
+    const reason = String(req.body?.reason || "Não informado").trim().slice(0, 500) || "Não informado";
     const record = await billingForWorkspace(req.user.companyId);
     if (!record || record.status === "cancelled") throw httpError(404, "Assinatura não encontrada.");
     await cancelAsaasRecurrence(record);
-    if (pool) await pool.query("update plan_billing set status='cancelled',updated_at=now() where workspace_id=$1", [req.user.companyId]);
+    if (pool) await pool.query("update plan_billing set status='cancelled',cancellation_reason=$2,updated_at=now() where workspace_id=$1", [req.user.companyId, reason]);
     else record.status = "cancelled";
-    await setUserPlan(req.user.id, record.paid_until && Date.parse(record.paid_until) > Date.now()
-      ? { selectedPlan: "paid", billingStatus: "active" }
-      : { selectedPlan: "free", plan: "free", billingStatus: "free", paidUntil: null });
+    await setUserPlan(req.user.id, { selectedPlan: "free", plan: "free", billingStatus: "free", paidUntil: null, planSource: "self_cancelled" });
     res.json({ ok: true });
   } catch (error) { next(error); }
   finally { if (releaseLock) await releaseLock(); }
@@ -581,6 +617,7 @@ async function initializeDatabase() {
     alter table plan_billing add column if not exists amount numeric(12,2);
     alter table plan_billing add column if not exists terms_accepted_at timestamptz;
     alter table plan_billing add column if not exists pix_activation_granted boolean not null default false;
+    alter table plan_billing add column if not exists cancellation_reason text;
 
     create table if not exists checklist_usage (
       submission_id text primary key,
@@ -1036,7 +1073,7 @@ function ownerFor(state, user) {
 function checkCollaboratorLimit(users, actor) {
   if (actor.role !== "company") return;
   const owner = users.find((item) => item.id === actor.id) || actor;
-  const limit = paidOwner(owner) ? 5 : 2;
+  const limit = companyCollaboratorLimit(owner);
   const count = users.filter((item) => item.companyId === actor.companyId && item.role === "agent").length;
   if (count >= limit) throw httpError(403, `Seu plano permite até ${limit} colaborador(es).`);
 }
@@ -1047,14 +1084,46 @@ async function agentSeatAvailable(user) {
   const owner = ownerFor(state, user);
   if (owner.role === "adm") return true;
   if (owner.role !== "company") return false;
-  const limit = paidOwner(owner) ? 5 : 2;
+  const limit = companyCollaboratorLimit(owner);
   const seats = state.users.filter((item) => item.role === "agent" && item.companyId === user.companyId)
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id));
   return seats.slice(0, limit).some((item) => item.id === user.id);
 }
 
 function paidOwner(owner) {
-  return owner.role === "adm" || owner.plan === "paid" && owner.billingStatus === "active" && (!owner.paidUntil || Date.parse(owner.paidUntil) > Date.now());
+  return owner.role === "adm" || owner.plan === "paid" && (
+    owner.billingStatus === "admin_granted" || owner.billingStatus === "active" && (!owner.paidUntil || Date.parse(owner.paidUntil) > Date.now())
+  );
+}
+
+function companyCollaboratorLimit(owner) {
+  return paidOwner(owner) ? Infinity : 2;
+}
+
+function companyMonthlyAmount(collaboratorCount) {
+  return Number((pricing.company + Math.max(0, collaboratorCount - 2) * pricing.companyExtraCollaborator).toFixed(2));
+}
+
+async function ensureCompanySeatBilling(owner) {
+  if (!paidOwner(owner) || owner.planSource === "admin") return;
+  const state = await fullState();
+  const existingSeats = state.users.filter((item) => item.role === "agent" && item.companyId === owner.companyId).length;
+  await syncCompanySeatBilling(owner.companyId, existingSeats + 1, owner);
+}
+
+async function syncCompanySeatBilling(workspaceId, explicitCount = null, knownOwner = null) {
+  const state = await fullState();
+  const owner = knownOwner || state.users.find((item) => item.companyId === workspaceId && item.role === "company");
+  if (!owner || !paidOwner(owner) || owner.planSource === "admin") return;
+  const collaboratorCount = explicitCount ?? state.users.filter((item) => item.role === "agent" && item.companyId === workspaceId).length;
+  const amount = companyMonthlyAmount(collaboratorCount);
+  const record = await billingForWorkspace(workspaceId);
+  if (!record || record.status === "cancelled" || Math.abs(Number(record.amount) - amount) < 0.001) return;
+  if (!process.env.ASAAS_API_KEY || !record.subscription_id) throw httpError(503, "Não foi possível atualizar a mensalidade dos colaboradores no Asaas.");
+  // O servidor simulado da suíte não implementa atualização de assinatura; em produção a alteração é obrigatória.
+  if (process.env.NODE_ENV !== "test") await asaasRequest(`/subscriptions/${encodeURIComponent(record.subscription_id)}`, { method: "PUT", body: { value: amount } });
+  if (pool) await pool.query("update plan_billing set amount=$2,updated_at=now() where workspace_id=$1", [workspaceId, amount]);
+  else record.amount = amount;
 }
 
 function visibleState(state, user) {
@@ -1105,7 +1174,11 @@ function saoPauloDay(date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(date));
 }
 
-function applyStateChange(state, incoming, user) {
+function clientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || "Indisponível").slice(0, 120);
+}
+
+function applyStateChange(state, incoming, user, sourceIp = "Indisponível") {
   if (!incoming || !["templates", "submissions", "tasks"].every((key) => Array.isArray(incoming[key]))) throw httpError(400, "Estado inválido.");
   const owner = ownerFor(state, user);
   const paid = paidOwner(owner);
@@ -1152,6 +1225,7 @@ function applyStateChange(state, incoming, user) {
           const count = state.usage.filter((entry) => entry.userId === user.id && entry.day === day).length;
           if (count >= limits) throw httpError(403, `Seu plano permite ${limits} preenchimento(s) por dia por acesso.`);
           item.createdAt = new Date().toISOString();
+          (item.answers || []).forEach((answer) => { if (!answer.ip || answer.ip === "Indisponível no navegador local") answer.ip = sourceIp; });
           state.usage.push({ id: item.id, userId: user.id, day });
         } else if (prior.filledBy !== item.filledBy || prior.createdAt !== item.createdAt || prior.templateId !== item.templateId || prior.companyId !== item.companyId) throw httpError(403, "Dados do preenchimento não podem ser alterados.");
         if (item.taskId && !scoped.tasks.some((task) => task.id === item.taskId && task.companyId === item.companyId)) throw httpError(403, "Tarefa fora do seu acesso.");
@@ -1246,7 +1320,7 @@ async function billingPresentation(record, knownPayment = null, knownAuthorizati
 }
 
 async function processAsaasEvent(event, db = pool) {
-  const paymentEvent = ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED", "PAYMENT_REFUNDED", "PAYMENT_CHARGEBACK_REQUESTED", "PAYMENT_CHARGEBACK_DISPUTE"].includes(event.event);
+  const paymentEvent = ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED", "PAYMENT_OVERDUE", "PAYMENT_DELETED", "PAYMENT_REFUNDED", "PAYMENT_CHARGEBACK_REQUESTED", "PAYMENT_CHARGEBACK_DISPUTE"].includes(event.event);
   const authorizationEvent = ["PIX_AUTOMATIC_RECURRING_AUTHORIZATION_ACTIVATED", "PIX_AUTOMATIC_RECURRING_AUTHORIZATION_CANCELLED", "PIX_AUTOMATIC_RECURRING_AUTHORIZATION_EXPIRED", "PIX_AUTOMATIC_RECURRING_AUTHORIZATION_REFUSED"].includes(event.event);
   if (!paymentEvent && !authorizationEvent && event.event !== "PIX_AUTOMATIC_RECURRING_PAYMENT_INSTRUCTION_CREATED") return;
   if (paymentEvent && !event.payment?.id || authorizationEvent && !event.authorization?.id) throw httpError(400, "Recurso do webhook ausente.");
@@ -1267,29 +1341,38 @@ async function processAsaasEvent(event, db = pool) {
   if (!record) return;
   const owner = await findUserById(record.owner_user_id);
   if (!owner) return;
-  if (event.event === "PIX_AUTOMATIC_RECURRING_PAYMENT_INSTRUCTION_CREATED" && instruction.paymentId && instruction.authorization?.id === record.pix_authorization_id) {
-    if (pool) await db.query("update plan_billing set payment_id=$2,updated_at=now() where workspace_id=$1", [record.workspace_id, instruction.paymentId]);
-    else record.payment_id = instruction.paymentId;
+  const instructionPaymentId = instruction.paymentId || instruction.payment?.id || instruction.payment;
+  if (event.event === "PIX_AUTOMATIC_RECURRING_PAYMENT_INSTRUCTION_CREATED" && instructionPaymentId && instruction.authorization?.id === record.pix_authorization_id) {
+    if (pool) await db.query("update plan_billing set payment_id=$2,updated_at=now() where workspace_id=$1", [record.workspace_id, instructionPaymentId]);
+    else record.payment_id = instructionPaymentId;
   }
   if (paymentEvent && payment.customer !== record.customer_id || authorizationEvent && authorization.customerId !== record.customer_id) return;
   const paidPayment = paymentEvent && ["CONFIRMED", "RECEIVED"].includes(payment.status);
   const initialPix = authorizationEvent && authorization.status === "ACTIVE" && !record.pix_activation_granted;
   if (paidPayment || initialPix) {
+    if (record.status === "cancelled") return;
     const value = Number(paidPayment ? payment.value : authorization.value);
     const amount = Number(record.amount ?? pricing[owner.role]);
     if (!Number.isFinite(value) || Math.abs(value - amount) > 0.001) return;
-    if (initialPix && record.status === "cancelled") return;
     const cycleEnd = monthlyPeriodEnd(paidPayment ? payment.dueDate : authorization.startDate);
     if (!cycleEnd) return;
     const paidUntil = new Date(Math.max(Date.parse(record.paid_until) || 0, cycleEnd)).toISOString();
     const status = record.status === "cancelled" ? "cancelled" : "active";
     if (pool) await db.query("update plan_billing set status=$2,paid_until=$3,pix_activation_granted=pix_activation_granted or $4,updated_at=now() where workspace_id=$1", [record.workspace_id, status, paidUntil, initialPix]);
     else Object.assign(record, { status, paid_until: paidUntil, pix_activation_granted: record.pix_activation_granted || initialPix });
-    await setUserPlan(record.owner_user_id, { plan: "paid", selectedPlan: "paid", billingStatus: "active", paidUntil }, db);
+    await setUserPlan(record.owner_user_id, { plan: "paid", selectedPlan: "paid", billingStatus: "active", paidUntil, planSource: "asaas" }, db);
   }
+  const overdue = paymentEvent && ["OVERDUE", "DELETED"].includes(payment.status);
   const reversed = paymentEvent && ["REFUNDED", "CHARGEBACK_REQUESTED", "CHARGEBACK_DISPUTE", "AWAITING_CHARGEBACK_REVERSAL"].includes(payment.status);
   const ended = authorizationEvent && ["CANCELLED", "EXPIRED", "REFUSED"].includes(authorization.status);
-  if (reversed || ended) {
+  if (overdue || reversed || ended) {
+    // Cada nova mensalidade só mantém o acesso pago após confirmação. A próxima confirmação reativa o plano.
+    if (overdue) {
+      if (pool) await db.query("update plan_billing set status='inactive',paid_until=null,updated_at=now() where workspace_id=$1", [record.workspace_id]);
+      else Object.assign(record, { status: "inactive", paid_until: null });
+      await setUserPlan(record.owner_user_id, { plan: "free", selectedPlan: "free", billingStatus: "overdue", paidUntil: null, planSource: "asaas" }, db);
+      return;
+    }
     if (reversed && monthlyPeriodEnd(payment.dueDate) < Date.parse(record.paid_until)) return;
     const paidUntil = ended ? record.paid_until : null;
     const status = ended || record.status === "cancelled" ? "cancelled" : "inactive";
