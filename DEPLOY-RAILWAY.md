@@ -26,6 +26,7 @@ O workflow `Tests` roda em Node.js 22 e executa a suite em memoria e em PostgreS
 | `ASAAS_ENV` | `sandbox` na homologacao; `production` somente para cobrancas reais. |
 | `ASAAS_API_KEY` | Chave completa da API do Asaas, correspondente ao ambiente escolhido. |
 | `ASAAS_WEBHOOK_TOKEN` | Segredo aleatorio de pelo menos 32 caracteres. Configure exatamente o mesmo no webhook Asaas. Nao e a chave da API. |
+| `APP_BASE_URL` | URL HTTPS pública do sistema, por exemplo `https://seu-app.up.railway.app`. Usada para retornar o cliente ao sistema após o pagamento. |
 | `PLAN_PERSONAL_PRICE` | `9.90`, mensal em reais. |
 | `PLAN_COMPANY_PRICE` | `34.90`, mensal em reais para a empresa e dois colaboradores. |
 | `PLAN_COMPANY_EXTRA_COLLABORATOR_PRICE` | `4.90`, mensal em reais por colaborador a partir do terceiro. |
@@ -33,7 +34,7 @@ O workflow `Tests` roda em Node.js 22 e executa a suite em memoria e em PostgreS
 
 Nao fixe `PORT`: o servidor utiliza o valor fornecido pela Railway. Nao configure `ASAAS_TEST_BASE_URL`, `TEST_DATABASE_URL` nem `NODE_ENV=test` em producao.
 
-Cole a chave Asaas inteira no valor de `ASAAS_API_KEY`, preservando o `$` inicial quando presente, sem adicionar aspas no campo individual da Railway. Uma chave sandbox nao serve em producao. Nao coloque a chave em `app.js`, HTML ou variaveis publicas de frontend.
+Cole a chave Asaas inteira no valor de `ASAAS_API_KEY`, preservando o `$` inicial quando presente, sem adicionar aspas no campo individual da Railway. Uma chave sandbox nao serve em producao. Nao coloque a chave em `app.js`, HTML ou variaveis publicas de frontend. Cadastre o mesmo domínio de `APP_BASE_URL` em Asaas, em **Configurações da conta > Informações**, para permitir o redirecionamento de retorno.
 
 Para gerar o token do webhook localmente, pode usar `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Guarde o resultado como segredo apenas na Railway e no Asaas; nao o envie em conversas ou commits.
 

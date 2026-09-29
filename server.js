@@ -301,7 +301,7 @@ app.post("/api/plan/start", requireUser, async (req, res, next) => {
     let authorization = null;
     let payment = null;
     if (method === "CREDIT_CARD") {
-      subscription = await asaasRequest("/subscriptions", { method: "POST", body: { customer: customer.id, billingType: "CREDIT_CARD", value, nextDueDate: saoPauloDay(new Date()), cycle: "MONTHLY", description: `Checklist Luma ${req.user.role === "company" ? "Empresa" : "Individual"}`, externalReference: req.user.companyId } });
+      subscription = await asaasRequest("/subscriptions", { method: "POST", body: { customer: customer.id, billingType: "CREDIT_CARD", value, nextDueDate: saoPauloDay(new Date()), cycle: "MONTHLY", description: `Checklist Luma ${req.user.role === "company" ? "Empresa" : "Individual"}`, externalReference: req.user.companyId, callback: { successUrl: paymentSuccessUrl(req), autoRedirect: true } } });
     } else {
       authorization = await asaasRequest("/pix/automatic/authorizations", { method: "POST", body: { customerId: customer.id, frequency: "MONTHLY", contractId: req.user.companyId.slice(0, 35), startDate: saoPauloDay(new Date()), value, description: "Checklist Luma mensal", paymentCreationMode: "SUBSCRIPTION", immediateQrCode: { originalValue: value, expirationSeconds: 3600 } } });
     }
@@ -315,8 +315,15 @@ app.post("/api/plan/start", requireUser, async (req, res, next) => {
 
 app.get("/api/plan/status", requireUser, async (req, res, next) => {
   try {
-    const owner = req.user.role === "agent" ? ownerFor(await fullState(), req.user) : req.user;
-    const record = await billingForWorkspace(owner.companyId);
+    let owner = req.user.role === "agent" ? ownerFor(await fullState(), req.user) : req.user;
+    let record = await billingForWorkspace(owner.companyId);
+    // O retorno do Asaas e o webhook podem chegar em ordens diferentes. Consultar a
+    // cobrança aqui deixa o retorno do cliente imediato, sem substituir o webhook.
+    if (record?.status === "pending") {
+      await reconcilePendingBilling(record);
+      owner = await findUserById(owner.id) || owner;
+      record = await billingForWorkspace(owner.companyId);
+    }
     res.json({ user: publicUser(owner), billing: record ? await billingPresentation(record) : null });
   } catch (error) { next(error); }
 });
@@ -433,6 +440,21 @@ function asaasBaseUrl() {
   return process.env.ASAAS_ENV === "production"
     ? "https://api.asaas.com/v3"
     : "https://api-sandbox.asaas.com/v3";
+}
+
+function paymentSuccessUrl(req) {
+  const configured = String(process.env.APP_BASE_URL || "").trim();
+  let url;
+  try {
+    url = configured ? new URL(configured) : new URL(`${req.protocol}://${req.get("host")}`);
+  } catch {
+    throw httpError(500, "Configure APP_BASE_URL com a URL pública do sistema.");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) throw httpError(500, "APP_BASE_URL deve usar HTTP ou HTTPS.");
+  url.pathname = "/";
+  url.search = "";
+  url.searchParams.set("payment", "success");
+  return url.toString();
 }
 
 async function asaasRequest(pathname, options = {}) {
@@ -1317,6 +1339,37 @@ async function billingPresentation(record, knownPayment = null, knownAuthorizati
     pixImage: authorization?.immediateQrCode?.encodedImage || authorization?.immediateQrCode?.image || null,
     paidUntil: record.paid_until || null
   };
+}
+
+async function reconcilePendingBilling(record) {
+  if (!process.env.ASAAS_API_KEY || record.method !== "CREDIT_CARD" || !record.subscription_id) return;
+  const list = await asaasRequest(`/subscriptions/${encodeURIComponent(record.subscription_id)}/payments`, { method: "GET" });
+  const payment = list.data?.[0];
+  const eventByStatus = {
+    CONFIRMED: "PAYMENT_CONFIRMED",
+    RECEIVED: "PAYMENT_RECEIVED",
+    OVERDUE: "PAYMENT_OVERDUE",
+    DELETED: "PAYMENT_DELETED",
+    REFUNDED: "PAYMENT_REFUNDED",
+    CHARGEBACK_REQUESTED: "PAYMENT_CHARGEBACK_REQUESTED",
+    CHARGEBACK_DISPUTE: "PAYMENT_CHARGEBACK_DISPUTE"
+  };
+  const event = eventByStatus[payment?.status];
+  if (!event || !payment?.id) return;
+  if (!pool) return processAsaasEvent({ event, payment: { id: payment.id } });
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(740120)");
+    await processAsaasEvent({ event, payment: { id: payment.id } }, client);
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function processAsaasEvent(event, db = pool) {

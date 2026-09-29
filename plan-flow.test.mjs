@@ -168,10 +168,15 @@ test("cadastro, limites por acesso e ativacao pelo webhook Asaas", async (t) => 
   const started = await api("/api/plan/start", "POST", { method: "CREDIT_CARD", termsAccepted: true }, subscriber.cookie);
   assert.equal(started.status, 200);
   assert.equal(started.body.invoiceUrl, "https://sandbox.asaas.com/pay/mock");
+  assert.deepEqual(subscriptions.get([...subscriptions.keys()][0]).callback, { successUrl: `${base}/?payment=success`, autoRedirect: true });
   assert.equal((await api("/api/asaas/webhook", "POST", { id: "evt_0", event: "PAYMENT_CONFIRMED", payment: {} })).status, 401);
   assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.plan, "free");
   const cardEvent = { id: "evt_1", event: "PAYMENT_CONFIRMED", payment: { id: "pay_sub_1", subscription: [...subscriptions.keys()][0], customer: customers.get("subscriber@example.invalid"), value: 9.90, dueDate: new Date().toISOString().slice(0, 10) } };
   payments.set(cardEvent.payment.id, { ...cardEvent.payment, status: "CONFIRMED" });
+  const reconciled = await api("/api/plan/status", "GET", null, subscriber.cookie);
+  assert.equal(reconciled.status, 200);
+  assert.equal(reconciled.body.user.plan, "paid");
+  assert.equal(reconciled.body.billing.status, "active");
   assert.equal((await api("/api/asaas/webhook", "POST", cardEvent, "", "test-webhook-token-long-enough-123456")).status, 200);
   assert.equal((await api("/api/auth/me", "GET", null, subscriber.cookie)).body.user.plan, "paid");
   assert.equal((await api("/api/state", "GET", null, subscriber.cookie)).body.templates.some((item) => item.id === "community-test"), true);

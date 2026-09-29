@@ -53,6 +53,7 @@ window.addEventListener("beforeinstallprompt", (event) => {
   });
 });
 document.addEventListener("DOMContentLoaded", async () => {
+  const returnedFromPayment = new URLSearchParams(window.location.search).get("payment") === "success";
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(STORE_KEY);
   const planResponse = await fetch("/api/plans").catch(() => null);
@@ -63,6 +64,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (adminSeedsAdded) { adminSeedsAdded = false; await saveState(); }
   applyTheme();
   render();
+  if (returnedFromPayment) {
+    history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+    await handlePaymentReturn();
+  }
   startTaskTicker();
   registerServiceWorker();
 });
@@ -2734,7 +2739,8 @@ function openPlanPaymentModal(result = null) {
       ${result ? renderPlanPaymentResult(result) : `
         <form class="form" data-form="plan-payment">
           ${!currentUser.document ? `<div class="form-row"><label>${currentUser.role === "company" ? "CNPJ" : "CPF"}</label><input name="document" inputmode="numeric" required placeholder="Somente números" /></div>` : ""}
-          <div class="form-row"><label>Forma de pagamento</label><select name="method"><option value="CREDIT_CARD">Cartão de crédito</option><option value="PIX_AUTOMATIC">Pix Automático</option></select></div>
+          <input name="method" type="hidden" value="CREDIT_CARD" />
+          <p class="small"><strong>Pagamento por cartão.</strong> Você será direcionado para a fatura segura do Asaas.</p>
           <p class="small">A assinatura renova mensalmente. O plano pago libera após a confirmação do pagamento. Você pode cancelar a recorrência em Plano e pagamento.</p>
           <label class="toggle-row"><input type="checkbox" name="termsAccepted" required /><span>Concordo com a cobrança mensal de ${formatMoney(planPrices[currentUser.role])} e com o processamento do pagamento pelo Asaas. <a href="https://www.asaas.com/politicas-de-seguranca" target="_blank" rel="noopener">Segurança do Asaas</a>.</span></label>
           <button class="primary-button" type="submit">Continuar para pagamento</button>
@@ -2746,7 +2752,7 @@ function openPlanPaymentModal(result = null) {
 function renderPlanPaymentResult(result) {
   return `<div class="plan-payment-result">
     <p>${result.status === "active" ? "Pagamento confirmado. Seu plano pago está ativo." : result.status === "pending" ? "Aguardando confirmação do pagamento pelo Asaas." : result.status === "cancelled" ? "A cobrança recorrente foi cancelada." : "O plano pago não está ativo."}</p>
-    ${result.invoiceUrl ? `<a class="primary-button" href="${escapeHtml(result.invoiceUrl)}" target="_blank" rel="noopener">Pagar cartão no Asaas</a>` : ""}
+    ${result.invoiceUrl ? `<a class="primary-button" href="${escapeHtml(result.invoiceUrl)}">Ir para pagamento seguro</a>` : ""}
     ${result.pixImage ? `<img alt="QR Code Pix Automático" src="data:image/png;base64,${escapeHtml(result.pixImage)}" />` : ""}
     ${result.pixPayload ? `<div class="form-row"><label>Pix copia e cola</label><textarea readonly>${escapeHtml(result.pixPayload)}</textarea></div>` : ""}
     ${result.status === "pending" ? `<button class="secondary-button" type="button" data-action="check-plan-status">Verificar pagamento</button>` : ""}
@@ -2777,6 +2783,39 @@ async function checkPlanStatus() {
   state = await loadState();
   render();
   openPlanPaymentModal(body.billing);
+}
+
+async function handlePaymentReturn() {
+  if (!currentUser) return;
+  let latest = null;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const response = await fetch("/api/plan/status").catch(() => null);
+    const body = response?.ok ? await response.json().catch(() => ({})) : {};
+    latest = body;
+    if (body.user) currentUser = body.user;
+    if (body.billing?.status === "active" || isPaidPlan(body.user)) {
+      state = await loadState();
+      render();
+      openPaymentConfirmationModal(body.billing);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+  state = await loadState();
+  render();
+  openPaymentConfirmationModal(latest?.billing, true);
+}
+
+function openPaymentConfirmationModal(billing, pending = false) {
+  closeAllModals();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `
+    <section class="modal compact-modal payment-confirmation-modal">
+      <div class="topbar"><div><span class="template-kicker">${pending ? "Pagamento em confirmação" : "Pagamento aprovado"}</span><h2>${pending ? "Estamos confirmando seu pagamento" : "Parabéns, seu plano está ativo!"}</h2><p>${pending ? "O pagamento foi concluído no Asaas. Atualizaremos seu acesso em instantes; se necessário, abra Plano e pagamento para verificar novamente." : `Seu acesso pago já está liberado${billing?.paidUntil ? ` até ${escapeHtml(formatDateOnly(String(billing.paidUntil).slice(0, 10)))}` : ""}. Obrigado por assinar!`}</p></div>${modalCloseButton()}</div>
+      <div class="toolbar"><button class="primary-button" data-action="close-modal" type="button">Continuar para o sistema</button></div>
+    </section>`;
+  mountModal(modal);
 }
 
 function openCancelPlanModal() {
