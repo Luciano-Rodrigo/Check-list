@@ -35,6 +35,8 @@ let mediaRecorder = null;
 let currentAudioField = "";
 let deferredInstallPrompt = null;
 let chunks = [];
+const reportPdfCache = new Map();
+const reportPdfBuilds = new Map();
 
 const app = document.getElementById("app");
 const templateEl = document.getElementById("field-template");
@@ -1586,14 +1588,18 @@ function openFillModal(templateId, taskId = "", submissionId = "") {
 
 function renderChecklistHeaderFields(tpl) {
   const fields = tpl.headerFields || [];
-  if (!fields.length) return "";
   return `
     <section class="checklist-header-card">
       <div>
         <span class="template-kicker">Cabecalho</span>
-        <h3>Dados iniciais</h3>
+        <h3>Dados iniciais e arquivo do laudo</h3>
       </div>
       <div class="checklist-header-grid">
+        <div class="form-row header-runtime-field report-file-name-field">
+          <label>Nome do arquivo do laudo *</label>
+          <input name="reportFileName" type="text" required value="${escapeHtml(tpl.title)}" maxlength="120" />
+          <span class="small">Este nome será usado no PDF baixado ou enviado pelo WhatsApp.</span>
+        </div>
         ${fields.map((field) => renderChecklistHeaderInput(field)).join("")}
       </div>
     </section>
@@ -1641,13 +1647,14 @@ function openFillPickerModal() {
 function openChecklistSuccessModal(submissionId) {
   const submission = state.submissions.find((item) => item.id === submissionId);
   if (!submission) return;
+  const pdfReady = reportPdfCache.has(submission.id);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.innerHTML = `
     <section class="modal compact-modal success-modal">
       <div class="success-check">${iconUi("check")}</div>
       <h2>Checklist preenchido com sucesso!</h2>
-      <p class="muted">${escapeHtml(submission.templateTitle)} foi salvo e já está disponível nos checklists preenchidos.</p>
+      <p class="muted">${escapeHtml(submission.templateTitle)} foi salvo e ${pdfReady ? "o PDF já está pronto para compartilhar" : "o PDF poderá ser preparado para compartilhamento"}.</p>
       <div class="success-actions">
         <button class="secondary-button" data-action="share-whatsapp" data-id="${submission.id}" type="button">Compartilhar PDF no Wpp</button>
         <button class="secondary-button icon-text" data-action="success-pdf" data-id="${submission.id}" type="button">${iconUi("pdf")} Exportar PDF</button>
@@ -1659,20 +1666,41 @@ function openChecklistSuccessModal(submissionId) {
   mountModal(modal);
 }
 
-async function shareSubmissionWhatsapp(id) {
+function submissionPdfFileName(submission) {
+  return `${safeFileName(submission.reportFileName || submission.templateTitle)}.pdf`;
+}
+
+function shareSubmissionWhatsapp(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
-  const fileName = `${safeFileName(submission.templateTitle)}.pdf`;
-  const blob = await buildSubmissionPdfBlob(submission);
+  const cached = reportPdfCache.get(id);
+  if (!cached) {
+    prepareSubmissionPdf(submission, (progress) => updateReportProgress(progress)).then(() => {
+      closeReportProgressOverlay();
+      openShareReadyModal(id);
+    }).catch(() => {
+      closeReportProgressOverlay();
+      alert("Não foi possível preparar o PDF para compartilhamento.");
+    });
+    openReportProgressOverlay(submission, "Preparando o PDF para compartilhamento");
+    return;
+  }
+  return sharePdfFile(submission, cached.blob);
+}
+
+function sharePdfFile(submission, blob) {
+  const fileName = submissionPdfFileName(submission);
   const file = new File([blob], fileName, { type: "application/pdf", lastModified: Date.now() });
   if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: fileName });
-      return;
-    } catch (error) {
+    return navigator.share({ files: [file], title: fileName }).catch((error) => {
       if (error?.name === "AbortError") throw error;
-    }
+      sharePdfFallback(submission, blob, fileName);
+    });
   }
+  return sharePdfFallback(submission, blob, fileName);
+}
+
+function sharePdfFallback(submission, blob, fileName) {
   downloadBlob(blob, fileName);
   const text = `Checklist preenchido: ${submission.templateTitle} em ${formatDate(submission.createdAt)} por ${userName(submission.filledBy)}.`;
   alert("Este navegador não permite anexar o PDF automaticamente. O arquivo completo foi baixado; anexe ele na conversa do WhatsApp.");
@@ -1682,47 +1710,119 @@ async function shareSubmissionWhatsapp(id) {
 async function exportSubmissionPdf(id) {
   const submission = state.submissions.find((item) => item.id === id);
   if (!submission) return;
-  const blob = await buildSubmissionPdfBlob(submission);
-  downloadBlob(blob, `${safeFileName(submission.templateTitle)}.pdf`);
+  const cached = await prepareSubmissionPdfWithProgress(submission, "Gerando o PDF para download");
+  downloadBlob(cached.blob, submissionPdfFileName(submission));
 }
 
-async function buildSubmissionPdfBlob(submission) {
+async function prepareSubmissionPdfWithProgress(submission, title) {
+  openReportProgressOverlay(submission, title);
+  try {
+    return await prepareSubmissionPdf(submission, updateReportProgress);
+  } finally {
+    closeReportProgressOverlay();
+  }
+}
+
+function prepareSubmissionPdf(submission, onProgress = () => {}) {
+  const cached = reportPdfCache.get(submission.id);
+  if (cached) {
+    onProgress({ percent: 100, detail: "PDF pronto para compartilhar." });
+    return Promise.resolve(cached);
+  }
+  if (reportPdfBuilds.has(submission.id)) return reportPdfBuilds.get(submission.id);
+  const build = buildSubmissionPdfBlob(submission, onProgress).then((blob) => {
+    const entry = { blob, createdAt: Date.now() };
+    reportPdfCache.set(submission.id, entry);
+    return entry;
+  }).finally(() => reportPdfBuilds.delete(submission.id));
+  reportPdfBuilds.set(submission.id, build);
+  return build;
+}
+
+function openReportProgressOverlay(submission, title = "Gerando laudo em PDF") {
+  document.querySelector(".report-progress-backdrop")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "report-progress-backdrop";
+  overlay.innerHTML = `
+    <section class="report-progress-card" role="status" aria-live="polite">
+      <div class="report-progress-spinner" aria-hidden="true"></div>
+      <span class="template-kicker">Laudo em preparação</span>
+      <h2>${escapeHtml(title)}</h2>
+      <p data-report-progress-detail>Organizando os dados do checklist.</p>
+      <div class="report-progress-track" aria-label="Progresso da geração do PDF"><span data-report-progress-bar style="width: 0%"></span></div>
+      <strong data-report-progress-value>0%</strong>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function updateReportProgress(progress = {}) {
+  const overlay = document.querySelector(".report-progress-backdrop");
+  if (!overlay) return;
+  const percent = Math.max(0, Math.min(100, Math.round(Number(progress.percent) || 0)));
+  overlay.querySelector("[data-report-progress-bar]").style.width = `${percent}%`;
+  overlay.querySelector("[data-report-progress-value]").textContent = `${percent}%`;
+  overlay.querySelector("[data-report-progress-detail]").textContent = progress.detail || "Preparando o laudo.";
+}
+
+function closeReportProgressOverlay() {
+  document.querySelector(".report-progress-backdrop")?.remove();
+}
+
+function openShareReadyModal(id) {
+  const submission = state.submissions.find((item) => item.id === id);
+  if (!submission) return;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<section class="modal compact-modal success-modal"><div class="success-check">${iconUi("check")}</div><h2>PDF pronto para compartilhar</h2><p class="muted">Toque no botão abaixo para enviar ${escapeHtml(submissionPdfFileName(submission))}.</p><button class="primary-button" data-action="share-whatsapp" data-id="${submission.id}" type="button">Compartilhar PDF no Wpp</button></section>`;
+  mountModal(modal);
+}
+
+async function buildSubmissionPdfBlob(submission, onProgress = () => {}) {
   const stats = reportStats(submission);
   const labels = statusLabels(submission);
   const rawPages = buildChecklistPdfPages(submission, stats, labels);
   const pages = [];
+  const attachmentEntries = submission.answers.flatMap((answer, index) => [
+    ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${index + 1} - Foto com documento: ${answer.title}` }] : []),
+    ...(answer.signature ? [{ src: answer.signature, label: `Item ${index + 1} - Assinatura: ${answer.title}` }] : []),
+  ]);
+  const totalSteps = rawPages.filter((page) => page.type === "photo-inline").length + attachmentEntries.length + 2;
+  let completedSteps = 0;
+  const reportProgress = (detail) => {
+    completedSteps++;
+    onProgress({ percent: Math.round(completedSteps / totalSteps * 100), detail });
+  };
+  onProgress({ percent: 0, detail: "Organizando os dados e páginas do laudo." });
   for (const page of rawPages) {
     if (page.type !== "photo-inline") { pages.push(page); continue; }
     const image = await dataUrlToPdfJpeg(page.src);
     if (image) pages.push({ type: "image", title: submission.templateTitle, accent: accentColor({ accent: submission.templateAccent }), backgroundStyle: submission.templateBackground || "clean", label: `Foto ${page.photoIndex + 1}`, item: buildPdfItem(submission, page.answer, page.answerIndex), metadata: photoPdfMetadata(page.answer, submission, page.metadata), images: [image] });
+    reportProgress(`Convertendo foto ${page.photoIndex + 1} para o PDF.`);
   }
   const logo = await dataUrlToPdfJpeg("assets/luma-logo.png");
   if (logo) pages.forEach((page) => {
     page.logo = logo;
   });
-  for (const [index, answer] of submission.answers.entries()) {
-    const photos = answer.photos?.length ? answer.photos : answer.photo ? [answer.photo] : [];
-    const entries = [
-      ...(answer.selfieDoc ? [{ src: answer.selfieDoc, label: `Item ${index + 1} - Foto com documento: ${answer.title}` }] : []),
-      ...(answer.signature ? [{ src: answer.signature, label: `Item ${index + 1} - Assinatura: ${answer.title}` }] : []),
-    ];
-    for (const entry of entries) {
-      const image = await dataUrlToPdfJpeg(entry.src);
-      if (image) pages.push({
-        type: "image",
-        title: submission.templateTitle,
-        accent: accentColor({ accent: submission.templateAccent }),
-        backgroundStyle: submission.templateBackground || "clean",
-        label: normalizePdfText(entry.label),
-        item: entry.item || null,
-        metadata: entry.metadata || "",
-        logo,
-        images: [image],
-      });
-    }
+  reportProgress("Inserindo a identidade visual no laudo.");
+  for (const entry of attachmentEntries) {
+    const image = await dataUrlToPdfJpeg(entry.src);
+    if (image) pages.push({
+      type: "image",
+      title: submission.templateTitle,
+      accent: accentColor({ accent: submission.templateAccent }),
+      backgroundStyle: submission.templateBackground || "clean",
+      label: normalizePdfText(entry.label),
+      item: entry.item || null,
+      metadata: entry.metadata || "",
+      logo,
+      images: [image],
+    });
+    reportProgress("Incluindo documento ou assinatura no laudo.");
   }
-
-  return buildPdfDocument(pages);
+  const pdf = buildPdfDocument(pages);
+  reportProgress("Finalizando o arquivo PDF.");
+  return pdf;
 }
 
 function buildChecklistPdfPages(submission, stats, labels) {
@@ -1750,7 +1850,9 @@ function buildChecklistPdfPages(submission, stats, labels) {
   submission.answers.forEach((answer, index) => {
     const hasPhotos = Boolean(answer.photos?.length || answer.photo);
     if (hasPhotos) {
-      if (page.items.length) pages.push(page);
+      // A foto pode ser o primeiro item. Nesse caso, a capa ainda precisa entrar
+      // no documento para preservar os dados preenchidos no cabeçalho.
+      if (page.cover || page.items.length) pages.push(page);
       const photos = answer.photos?.length ? answer.photos : [answer.photo];
       photos.forEach((src, photoIndex) => pages.push({ type: "photo-inline", src, answer, answerIndex: index, photoIndex, metadata: answer.photoMetadata?.[photoIndex] || {} }));
       page = basePage();
@@ -1769,6 +1871,17 @@ function buildChecklistPdfPages(submission, stats, labels) {
   });
   if (page.items.length || !pages.length) pages.push(page);
   if (submission.templateLayout?.length) pages.unshift({ ...basePage(), cover: false, layout: submission.templateLayout });
+  const headerValues = (submission.headerValues || []).filter((item) => item.value);
+  const overflowHeaderValues = headerValues.slice(6);
+  if (overflowHeaderValues.length) {
+    const coverIndex = pages.findIndex((entry) => entry.cover);
+    const headerPages = Array.from({ length: Math.ceil(overflowHeaderValues.length / 12) }, (_, index) => ({
+      ...basePage(),
+      cover: false,
+      headerContinuation: overflowHeaderValues.slice(index * 12, index * 12 + 12),
+    }));
+    pages.splice(coverIndex >= 0 ? coverIndex + 1 : 0, 0, ...headerPages);
+  }
   return pages;
 }
 
@@ -1985,6 +2098,10 @@ function pdfContentPageContent(page, logo, pageNumber, totalPages) {
     if (logo) commands.push(pdfImageCommand("Logo", 42, 810, 24, 24));
     commands.push(pdfText(normalizePdfText(page.title), logo ? 74 : 42, 818, 12, "1 1 1"));
     commands.push(pdfText(`Pagina ${pageNumber} de ${totalPages}`, 488, 818, 9, "0.92 0.96 1"));
+    if (page.headerContinuation?.length) {
+      commands.push(pdfSectionTitle("Dados do cabecalho (continuacao)", 42, 776, accent));
+      commands.push(...pdfHeaderValueRows(page.headerContinuation, 42, 744));
+    }
   }
   let y = page.cover ? pdfCoverItemsStartY(page) : 768;
   if (page.layout?.length) commands.push(...pdfLayoutElements(page.layout));
@@ -2069,13 +2186,18 @@ function pdfVisibleHeaderValues(page) {
   return (page.headerValues || []).filter((item) => item.value);
 }
 
+function pdfCoverHeaderValues(page) {
+  return pdfVisibleHeaderValues(page).slice(0, 6);
+}
+
 function pdfCoverItemsStartY(page) {
   const headerRows = Math.ceil(Math.min(6, pdfVisibleHeaderValues(page).length) / 2);
   return headerRows ? 420 - headerRows * 28 : 464;
 }
 
 function pdfHeaderValueRows(page, x, y) {
-  return pdfVisibleHeaderValues(page).slice(0, 6).map((item, index) => {
+  const values = Array.isArray(page) ? page : pdfCoverHeaderValues(page);
+  return values.map((item, index) => {
     const row = Math.floor(index / 2);
     const col = index % 2;
     const rowX = x + col * 256;
@@ -2237,6 +2359,7 @@ function renderRuntimeField(field, tpl = {}) {
 }
 
 function hydrateSubmissionForm(submission) {
+  setInputValue("reportFileName", submission.reportFileName || submission.templateTitle || "");
   (submission.headerValues || []).forEach((item) => {
     setInputValue(`header_${item.fieldId}`, item.value || "");
   });
@@ -2961,6 +3084,11 @@ async function submitUser(formType, data) {
 async function submitChecklist(form, data) {
   const tpl = state.templates.find((item) => item.id === form.dataset.templateId);
   if (!tpl) return;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Salvando checklist...";
+  }
   const headerValues = (tpl.headerFields || []).map((field) => ({
     fieldId: field.id,
     label: field.label,
@@ -2994,6 +3122,7 @@ async function submitChecklist(form, data) {
     id: existingId || uid(),
     templateId: tpl.id,
     templateTitle: tpl.title,
+    reportFileName: String(data.get("reportFileName") || tpl.title).trim() || tpl.title,
     templateAccent: tpl.accent || "blue",
     templateCategory: tpl.category || "Operação",
     templateArtHeader: tpl.artHeader || "clean",
@@ -3025,8 +3154,23 @@ async function submitChecklist(form, data) {
     }
   }
   const savedLocally = await saveState();
-  if (!savedLocally) return;
+  if (!savedLocally) {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = existingId ? "Salvar edição" : "Finalizar checklist";
+    }
+    return;
+  }
+  reportPdfCache.delete(payload.id);
   closeAllModals();
+  openReportProgressOverlay(payload, "Gerando seu laudo em PDF");
+  try {
+    await prepareSubmissionPdf(payload, updateReportProgress);
+  } catch (error) {
+    console.error("Falha ao preparar o PDF", error);
+  } finally {
+    closeReportProgressOverlay();
+  }
   render();
   openChecklistSuccessModal(payload.id);
 }

@@ -1007,6 +1007,73 @@ textarea {
   margin-top: 4px;
 }
 
+.report-progress-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(8, 10, 16, .66);
+}
+
+.report-progress-card {
+  width: min(440px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 30px;
+  text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.report-progress-card h2,
+.report-progress-card p {
+  margin: 0;
+}
+
+.report-progress-card p {
+  min-height: 2.8em;
+  color: var(--muted);
+}
+
+.report-progress-spinner {
+  width: 38px;
+  height: 38px;
+  border: 4px solid color-mix(in srgb, var(--primary) 18%, transparent);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: report-progress-spin 850ms linear infinite;
+}
+
+.report-progress-track {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  background: var(--surface-soft);
+  border-radius: 999px;
+}
+
+.report-progress-track span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: inherit;
+  transition: width 180ms ease-out;
+}
+
+.report-progress-card strong {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes report-progress-spin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes popSuccess {
   0% {
     opacity: 0;
@@ -1461,6 +1528,10 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.report-file-name-field {
+  grid-column: 1 / -1;
 }
 
 .header-runtime-field textarea {
